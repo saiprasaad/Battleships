@@ -26,7 +26,15 @@ struct BattleControllerTests {
         #expect(controller.canFire)
         #expect(feedback.events.last == .aim)
 
-        await controller.fire()
+        let firing = Task { await controller.fire() }
+        // The player's shell lands at once. Its splash or flame only lasts a moment, so look for it
+        // before the computer's reply rather than after.
+        let landed = { controller.effects.contains { $0.board == .target && $0.coordinate == target } }
+        for _ in 0..<100 where !landed() {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(landed())
+        await firing.value
 
         // The player's shot, then the computer's reply.
         let played = try #require(app.solo.match(match.id))
@@ -36,7 +44,6 @@ struct BattleControllerTests {
         #expect(controller.isMyTurn)
         #expect(feedback.events.contains(.fire))
         #expect(feedback.events.contains(.incoming), "the computer's guns are heard")
-        #expect(controller.effects.contains { $0.board == .target && $0.coordinate == target })
         #expect(controller.effects.contains { $0.board == .home })
         #expect(controller.announcement != nil, "the computer's shot is announced")
     }
