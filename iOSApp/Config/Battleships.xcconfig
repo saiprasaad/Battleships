@@ -1,0 +1,12 @@
+// Build settings for the Battleships app target.
+
+// The server the app talks to. You can also change it at runtime under Profile → Settings → Server.
+//
+// - Debug builds use a server on this Mac (run `swift run --package-path Server BattleshipServer serve`).
+//   The iOS Simulator shares the Mac's network, so localhost works. On a real iPhone, use your Mac's
+//   Bonjour name instead, e.g. http://my-mac.local:8080.
+// - Release builds should point at your deployed server (HTTPS).
+//
+// Note: "//" starts a comment in .xcconfig files, so the URLs below write it as "/$()/".
+API_BASE_URL[config=Debug] = http:/$()/localhost:8080
+API_BASE_URL[config=Release] = https:/$()/battleships.example.com

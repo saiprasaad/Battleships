@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Engine + server tests (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.3-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SwiftPM builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            BattleshipKit/.build
+            Server/.build
+          key: linux-swiftpm-${{ hashFiles('Server/Package.resolved', 'Server/Package.swift', 'BattleshipKit/Package.swift') }}
+          restore-keys: linux-swiftpm-
+      - name: BattleshipKit tests
+        run: swift test --package-path BattleshipKit
+      - name: Server tests
+        run: swift test --package-path Server
+
+  server-macos:
+    name: Server tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select the newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | grep -E 'Xcode_[0-9.]+\.app$' | sort -V | tail -n 1)"
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          swift --version
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: Server/.build
+          key: macos-swiftpm-${{ hashFiles('Server/Package.resolved', 'Server/Package.swift') }}
+          restore-keys: macos-swiftpm-
+      # Also exercises the app's URLSession WebSocket client against the real server.
+      - name: Server tests
+        run: swift test --package-path Server
+
+  ios:
+    name: iOS app (build + unit tests)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select the newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | grep -E 'Xcode_[0-9.]+\.app$' | sort -V | tail -n 1)"
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+      - name: Pick an iPhone simulator
+        id: simulator
+        run: |
+          UDID="$(xcrun simctl list devices available -j | python3 -c '
+          import json, re, sys
+          best = None
+          for runtime, devices in json.load(sys.stdin)["devices"].items():
+              match = re.search(r"iOS-(\d+)-(\d+)", runtime)
+              if not match:
+                  continue
+              version = (int(match.group(1)), int(match.group(2)))
+              for device in devices:
+                  if device["name"].startswith("iPhone") and (best is None or version > best[0]):
+                      best = (version, device["udid"], device["name"])
+          print(best[1])
+          print(f"Simulator: {best[2]} (iOS {best[0][0]}.{best[0][1]})", file=sys.stderr)
+          ')"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+      - name: Build and test
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project iOSApp/Battleships.xcodeproj \
+            -scheme Battleships \
+            -destination "id=${{ steps.simulator.outputs.udid }}" \
+            -resultBundlePath build/Battleships.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            -quiet
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Battleships.xcresult
+          path: build/Battleships.xcresult
+
+  docker:
+    name: Server Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Server/Dockerfile
+          tags: battleships-server:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        run: |
+          docker run -d --name battleships -p 8080:8080 battleships-server:ci
+          for attempt in $(seq 1 30); do
+            curl -fsS http://localhost:8080/health && break
+            sleep 2
+          done
+          curl -fsS -X POST http://localhost:8080/v1/auth/register \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"ci_smoke","password":"long enough"}'
+          echo
+          docker logs battleships
