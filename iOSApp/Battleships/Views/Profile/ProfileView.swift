@@ -99,6 +99,11 @@ struct ProfileView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        HowToPlayView()
+                    } label: {
+                        Label("How to Play", systemImage: "questionmark.circle")
+                    }
                     LabeledContent("Version", value: Self.version)
                 }
             }
