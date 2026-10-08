@@ -115,19 +115,53 @@ jobs:
           print(f"Simulator: {best[2]} (iOS {best[0][0]}.{best[0][1]})", file=sys.stderr)
           ')"
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+      # A video of the simulator for the whole test run, so the animations the screenshot test
+      # plays (its filmstrips, each introduced by a magenta title card) can be watched frame by
+      # frame from the artifact. Snapshots from inside the test are too slow to catch motion.
+      - name: Start recording the simulator
+        id: recording
+        run: |
+          udid="${{ steps.simulator.outputs.udid }}"
+          xcrun simctl boot "$udid" 2> /dev/null || true
+          xcrun simctl bootstatus "$udid" -b > /dev/null
+          mkdir -p build
+          xcrun simctl io "$udid" recordVideo --codec h264 --force build/motion.mp4 > build/recording.log 2>&1 &
+          echo "pid=$!" >> "$GITHUB_OUTPUT"
+          sleep 3
       - name: Build and test
         env:
           # Lets the screenshot test render the main screens (see BattleshipsTests/ScreenshotTests.swift).
           TEST_RUNNER_SCREENSHOT_DIR: ${{ github.workspace }}/build/screenshots
         run: |
           set -o pipefail
+          # Tests run on the recorded simulator itself rather than a clone of it.
           xcodebuild test \
             -project iOSApp/Battleships.xcodeproj \
             -scheme Battleships \
             -destination "id=${{ steps.simulator.outputs.udid }}" \
             -resultBundlePath build/Battleships.xcresult \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             -quiet
+      - name: Stop recording
+        if: always()
+        run: |
+          pid="${{ steps.recording.outputs.pid }}"
+          if [ -n "$pid" ]; then
+            kill -INT "$pid" 2> /dev/null || true
+            for _ in $(seq 1 30); do
+              kill -0 "$pid" 2> /dev/null || break
+              sleep 1
+            done
+          fi
+          ls -la build/motion.mp4 2> /dev/null || cat build/recording.log || true
+      - name: Upload the simulator video
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: motion-video
+          path: build/motion.mp4
+          if-no-files-found: warn
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4

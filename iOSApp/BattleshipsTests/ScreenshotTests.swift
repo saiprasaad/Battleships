@@ -186,8 +186,14 @@ struct ScreenshotTests {
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(origin: .zero, size: scene.screen.bounds.size)
         window.overrideUserInterfaceStyle = .dark
-        window.rootViewController = UIHostingController(rootView: view)
+        // A title card first, so the strip can be found in CI's video of the simulator.
+        window.rootViewController = UIHostingController(rootView: FilmstripMarker(title: name, color: Color(red: 1, green: 0, blue: 1)))
         window.makeKeyAndVisible()
+        try await Task.sleep(for: .milliseconds(700))
+        let timeline = directory.appendingPathComponent("timeline.txt")
+        let entry = "\(name) \(seconds)s\n"
+        try ((try? String(contentsOf: timeline, encoding: .utf8)) ?? "").appending(entry).write(to: timeline, atomically: true, encoding: .utf8)
+        window.rootViewController = UIHostingController(rootView: view)
         controller?.viewDidAppear()
         // A moment for the first frame to reach the screen, whether or not the view is left to settle.
         try await Task.sleep(for: .seconds(max(settle, 0.05)))
@@ -215,6 +221,9 @@ struct ScreenshotTests {
             try await Task.sleep(for: .milliseconds(80))
         }
         controller?.viewDidDisappear()
+        // An end card, so the strip's last frame is unambiguous in the video.
+        window.rootViewController = UIHostingController(rootView: FilmstripMarker(title: "end", color: Color(red: 0, green: 1, blue: 0)))
+        try await Task.sleep(for: .milliseconds(400))
         window.isHidden = true
         window.rootViewController = nil
     }
@@ -253,6 +262,21 @@ struct ScreenshotTests {
         try #require(image.pngData()).write(to: directory.appendingPathComponent("\(name).png"))
         window.isHidden = true
         window.rootViewController = nil
+    }
+}
+
+/// A solid, unmistakable card between filmstrips, for finding them in a video of the simulator.
+private struct FilmstripMarker: View {
+    let title: String
+    let color: Color
+
+    var body: some View {
+        ZStack {
+            color.ignoresSafeArea()
+            Text(title)
+                .font(.system(size: 34, weight: .black, design: .monospaced))
+                .foregroundStyle(.white)
+        }
     }
 }
 
