@@ -189,11 +189,10 @@ struct ScreenshotTests {
         window.rootViewController = UIHostingController(rootView: view)
         window.makeKeyAndVisible()
         controller?.viewDidAppear()
-        if settle > 0 {
-            try await Task.sleep(for: .seconds(settle))
-            if let controller {
-                await controller.load()
-            }
+        // A moment for the first frame to reach the screen, whether or not the view is left to settle.
+        try await Task.sleep(for: .seconds(max(settle, 0.05)))
+        if settle > 0, let controller {
+            await controller.load()
         }
 
         let format = UIGraphicsImageRendererFormat()
@@ -204,8 +203,10 @@ struct ScreenshotTests {
         action()
         var frame = 0
         while ContinuousClock.now - start < .seconds(seconds) {
+            // Snapshot what is on screen right now. Waiting for screen updates instead would stall
+            // behind the looping animations, which always have an update pending.
             let image = renderer.image { _ in
-                _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
             }
             let elapsed = (ContinuousClock.now - start) / .milliseconds(1)
             try #require(image.jpegData(compressionQuality: 0.82))
