@@ -57,9 +57,10 @@ final class RealtimeHubTests: ServerTestCase {
         }
         let remaining = await hub.connectionCount(for: bobID)
         XCTAssertEqual(remaining, 0)
-        // One read is enough to see the reset (some platforms only report it to a reader).
-        stalled.channel.read()
-        try await withTimeout(.seconds(5)) { try await stalled.channel.closeFuture.get() }
+        // When Bob's phone reads again, it finds the connection gone. It has to read through what's
+        // already in its buffer first: Linux throws that away on a reset, but macOS delivers it.
+        try await stalled.channel.setOption(ChannelOptions.autoRead, value: true).get()
+        try await withTimeout(.seconds(10)) { try await stalled.channel.closeFuture.get() }
     }
 
     func testEachPlayerKeepsAtMostFiveConnections() async throws {
