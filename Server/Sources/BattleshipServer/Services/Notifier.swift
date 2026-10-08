@@ -1,0 +1,93 @@
+import BattleshipAPI
+import BattleshipCore
+import Fluent
+import Vapor
+
+/// Tells players about changes to their games: instantly over WebSocket, and by push notification
+/// for the things worth interrupting someone for.
+struct Notifier: Sendable {
+    let hub: RealtimeHub
+    let push: any PushService
+    let writeLock: AsyncLock
+    let database: @Sendable () -> any Database
+    let logger: Logger
+
+    /// Sends each player in `game` their own up-to-date view of it. Expects both players to be loaded.
+    func broadcast(_ game: GameRecord) async {
+        for seat in Player.allCases {
+            guard let userID = game.userID(at: seat) else { continue }
+            do {
+                let detail = try GamePresenter.detail(of: game, for: seat)
+                await hub.send(.gameUpdated(detail), to: userID)
+            } catch {
+                logger.error("Could not present game \(game.id?.uuidString ?? "?"): \(error)")
+            }
+        }
+    }
+
+    func removed(_ gameID: UUID, reason: GameRemovalReason, notifying userIDs: [UUID?]) async {
+        for userID in Set(userIDs.compactMap { $0 }) {
+            await hub.send(.gameRemoved(gameID: gameID, reason: reason), to: userID)
+        }
+    }
+
+    /// Pushes `message` to every device `userID` has registered. Runs in the background so a slow
+    /// APNs round trip never holds up a move; tokens Apple rejects are forgotten.
+    func push(_ message: PushMessage, to userID: UUID?) {
+        guard let userID else { return }
+        let push = push, writeLock = writeLock, database = database, logger = logger
+        Task {
+            do {
+                let devices = try await Device.query(on: database()).filter(\.$user.$id == userID).all()
+                guard !devices.isEmpty else { return }
+                let targets = devices.map { PushTarget(token: $0.token, environment: $0.pushEnvironment) }
+                let invalid = await push.send(message, to: targets)
+                guard !invalid.isEmpty else { return }
+                try await writeLock.withLock {
+                    try await Device.query(on: database()).filter(\.$token ~~ invalid).delete()
+                }
+            } catch {
+                logger.warning("Push notification failed: \(error)")
+            }
+        }
+    }
+}
+
+extension PushMessage {
+    static func challenge(from challenger: String, mode: GameMode, gameID: UUID) -> PushMessage {
+        PushMessage(title: "New challenge", body: "\(challenger) challenged you to a \(mode.displayName) battle.", gameID: gameID)
+    }
+
+    static func challengeAccepted(by opponent: String, gameID: UUID) -> PushMessage {
+        PushMessage(title: "Challenge accepted", body: "\(opponent) is ready for battle. You fire first!", gameID: gameID)
+    }
+
+    static func challengeDeclined(by opponent: String, gameID: UUID) -> PushMessage {
+        PushMessage(title: "Challenge declined", body: "\(opponent) declined your challenge.", gameID: gameID)
+    }
+
+    static func opponentFound(_ opponent: String, gameID: UUID) -> PushMessage {
+        PushMessage(title: "Opponent found", body: "You're up against \(opponent). You fire first!", gameID: gameID)
+    }
+
+    static func incoming(_ move: Move, from opponent: String, gameID: UUID) -> PushMessage {
+        let body = switch move.result {
+        case .miss: "\(opponent) fired at \(move.target) and missed."
+        case .hit: "\(opponent) hit your ship at \(move.target)!"
+        case let .sunk(kind): "\(opponent) sank your \(kind.displayName)!"
+        }
+        return PushMessage(title: "Your turn", body: body, gameID: gameID)
+    }
+
+    static func defeat(by opponent: String, gameID: UUID) -> PushMessage {
+        PushMessage(title: "Defeat", body: "\(opponent) sank your last ship.", gameID: gameID)
+    }
+
+    static func opponentResigned(_ opponent: String, gameID: UUID) -> PushMessage {
+        PushMessage(title: "Victory!", body: "\(opponent) resigned. You win!", gameID: gameID)
+    }
+
+    static func opponentLeft(gameID: UUID) -> PushMessage {
+        PushMessage(title: "Victory!", body: "Your opponent left Battleships. You win!", gameID: gameID)
+    }
+}

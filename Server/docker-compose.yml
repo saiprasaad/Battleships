@@ -1,0 +1,39 @@
+# Run the server locally in Docker:
+#
+#   docker compose -f Server/docker-compose.yml up --build
+#
+# Data is kept in the `battleships-data` volume. To use Postgres instead of SQLite, start with
+# `--profile postgres` and uncomment DATABASE_URL below.
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: Server/Dockerfile
+    image: battleships-server:latest
+    ports:
+      - "8080:8080"
+    environment:
+      LOG_LEVEL: info
+      # DATABASE_URL: postgres://battleships:battleships@db:5432/battleships
+      # Push notifications (optional) — see README:
+      # APNS_KEY_ID: ABC123DEFG
+      # APNS_TEAM_ID: TEAM123456
+      # APNS_TOPIC: com.example.battleships
+      # APNS_PRIVATE_KEY_PATH: /run/secrets/apns.p8
+    volumes:
+      - battleships-data:/app/data
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_USER: battleships
+      POSTGRES_PASSWORD: battleships
+      POSTGRES_DB: battleships
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  battleships-data:
+  postgres-data:

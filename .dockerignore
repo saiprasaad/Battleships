@@ -1,0 +1,14 @@
+# Only BattleshipKit/ and Server/ are needed to build the server image.
+**/.build
+**/.swiftpm
+**/*.sqlite*
+.git
+.github
+iOSApp
+android
+ios
+lib
+linux
+macos
+web
+windows
