@@ -58,10 +58,15 @@ struct PlayersController: RouteCollection {
         if !blocked.isEmpty {
             query = query.filter(\.$id !~ blocked)
         }
-        return try await query
+        // The final order is decided here, byte by byte: a database collation may ignore the "_"
+        // (Postgres in an English locale does), and results should be the same on any database.
+        let matches = try await query
             .sort(\.$usernameKey)
-            .limit(Self.searchLimit)
+            .limit(Self.searchLimit * 5)
             .all()
+        return try matches
+            .sorted { $0.usernameKey.utf8.lexicographicallyPrecedes($1.usernameKey.utf8) }
+            .prefix(Self.searchLimit)
             .map { try $0.summary() }
     }
 
