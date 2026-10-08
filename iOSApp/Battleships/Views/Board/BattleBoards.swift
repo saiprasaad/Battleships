@@ -196,7 +196,7 @@ struct PlacementBoard: View {
             .zIndex(isDragging ? 1 : 0)
             .accessibilityElement()
             .accessibilityLabel("\(ship.kind.displayName), \(ship.length) squares")
-            .accessibilityValue("\(ship.orientation == .horizontal ? "Horizontal" : "Vertical"), from \(ship.origin) to \(ship.end)")
+            .accessibilityValue("\(ship.orientation == .horizontal ? "Horizontal" : "Vertical"), from \(ship.origin.notation) to \(ship.end.notation)")
             .accessibilityHint("Double-tap to turn. Swipe up or down for more actions.")
             .accessibilityAction { rotate(index) }
             .accessibilityAction(named: "Move up") { nudge(index, rows: -1) }
