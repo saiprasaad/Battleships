@@ -7,6 +7,8 @@ enum FeedbackEvent: CaseIterable, Sendable {
     case place
     case invalid
     case fire
+    /// The opponent fired at the player's fleet.
+    case incoming
     case miss
     case hit
     case sunk

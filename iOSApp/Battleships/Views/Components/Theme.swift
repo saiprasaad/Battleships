@@ -17,14 +17,11 @@ enum Theme {
     static let superstructure = Color(red: 0.89, green: 0.93, blue: 0.97)
     static let flightDeck = Color(red: 0.26, green: 0.30, blue: 0.36)
     static let submarine = Color(red: 0.22, green: 0.27, blue: 0.34)
-    static let wreck = Color(red: 0.30, green: 0.15, blue: 0.13)
-    static let charred = Color(red: 0.12, green: 0.07, blue: 0.07)
 
     // Fire, water and light
     static let hit = Color(red: 1.00, green: 0.33, blue: 0.24)
     static let flame = Color(red: 1.00, green: 0.68, blue: 0.22)
     static let ember = Color(red: 1.00, green: 0.87, blue: 0.45)
-    static let spray = Color.white.opacity(0.88)
     static let reticle = Color(red: 0.40, green: 0.92, blue: 1.00)
     static let victory = Color(red: 0.32, green: 0.86, blue: 0.56)
     static let gold = Color(red: 1.00, green: 0.82, blue: 0.30)

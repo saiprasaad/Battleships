@@ -35,6 +35,7 @@ struct BattleControllerTests {
         #expect(controller.aimed == nil)
         #expect(controller.isMyTurn)
         #expect(feedback.events.contains(.fire))
+        #expect(feedback.events.contains(.incoming), "the computer's guns are heard")
         #expect(controller.effects.contains { $0.board == .target && $0.coordinate == target })
         #expect(controller.effects.contains { $0.board == .home })
         #expect(controller.announcement != nil, "the computer's shot is announced")

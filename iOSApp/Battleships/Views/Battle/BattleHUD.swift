@@ -210,7 +210,7 @@ struct FleetSheet: View {
                             HomeBoard(
                                 perspective: perspective,
                                 effects: controller.effects,
-                                isUnderFire: controller.mood == .danger
+                                isUnderFire: controller.mood == .danger || controller.mood == .waiting
                             )
                             .shakes(on: controller.hitsTaken)
                             .frame(maxWidth: 520)

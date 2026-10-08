@@ -2,9 +2,19 @@
 
 A native iOS Battleships game with its own backend, written in Swift end to end.
 
-- **`iOSApp/`**: the SwiftUI app. Play the computer offline, get matched with a random opponent, or challenge a friend by username. Live updates, push notifications, a leaderboard, and full VoiceOver support.
+- **`iOSApp/`**: the SwiftUI app. Play the computer offline, get matched with a random opponent, or challenge a friend by username. Live updates, push notifications, a leaderboard, and full VoiceOver support. Battles are played on an animated sea: every class of ship is drawn in detail, shells explode or splash where they land, and the sound effects are synthesised in code.
 - **`Server/`**: the backend, built from scratch on [Vapor](https://vapor.codes). Accounts, matchmaking, challenges, server-enforced rules, Elo ratings, WebSocket events and optional Apple push notifications. Runs on SQLite or Postgres.
 - **`BattleshipKit/`**: a Swift package shared by both. It holds the game engine, the computer opponents, the JSON wire format and the networking client. Because the app and server compile against the same types, their API can't drift apart.
+
+<p align="center">
+  <img src="docs/screenshots/lobby.jpg" width="200" alt="The lobby: a radar sweeping the sea above your battles">
+  <img src="docs/screenshots/battle.jpg" width="200" alt="A battle: aiming at enemy waters, with your own fleet in miniature">
+  <img src="docs/screenshots/victory.jpg" width="200" alt="Victory, with a gold sunburst">
+  <img src="docs/screenshots/deploy.jpg" width="200" alt="Deploying your fleet">
+</p>
+<p align="center">
+  <img src="docs/screenshots/ipad.jpg" width="820" alt="A battle on iPad, with both boards side by side">
+</p>
 
 > The original Flutter client (`lib/`, `android/`, `ios/`, `web/`, …) is still at the repository root. It talks to the old CS 442 course server and isn't used by the new app.
 
@@ -143,7 +153,8 @@ How the code is organised:
 - **`BattleshipKit/Sources/BattleshipAPI`** and **`BattleshipClient`**: the wire format, plus `APIClient` (REST) and `RealtimeClient` (WebSocket that reconnects with backoff).
 - **`Server/Sources/BattleshipServer`**: `GameService` holds the game logic. Every write goes through one async lock, so two requests can't act on the same game or grab the same matchmaking opponent.
 - **`iOSApp/Battleships/Model`**: app state with no UIKit or SwiftUI imports (stores, `BattleController`, fleet placement). It's unit tested in `iOSApp/BattleshipsTests`.
-- **`iOSApp/Battleships/Views`**: SwiftUI. Liquid Glass is used on iOS 26, with materials as the fallback on iOS 17 and later.
+- **`iOSApp/Battleships/Views`**: SwiftUI. Ships, explosions and the sea are drawn with `Canvas`; looping effects run off a `TimelineView` and hold still when Reduce Motion is on. Liquid Glass is used on iOS 26, with materials as the fallback on iOS 17 and later.
+- **`iOSApp/Battleships/Model/SoundSynthesis.swift`**: the sound effects, generated as samples at launch (so there are no audio files) and played through `AVAudioEngine` with the ambient session, which respects the silent switch.
 
 To regenerate the app icon: `python3 iOSApp/Tools/make_app_icon.py iOSApp/Battleships/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png` (needs Pillow).
 

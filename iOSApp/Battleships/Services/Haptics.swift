@@ -27,6 +27,8 @@ final class Haptics: FeedbackPlayer {
             notification.notificationOccurred(.warning)
         case .fire:
             medium.impactOccurred()
+        case .incoming:
+            light.impactOccurred()
         case .miss:
             soft.impactOccurred(intensity: 0.7)
         case .hit:

@@ -15,6 +15,7 @@ enum SoundSynthesis {
         case .aim: ping()
         case .invalid: buzz()
         case .fire: gunshot()
+        case .incoming: distantGun()
         case .miss: delayed(splash())
         case .hit: delayed(explosion(seconds: 1.3, depth: 1))
         case .sunk: delayed(explosion(seconds: 2.2, depth: 1.7))
@@ -37,6 +38,13 @@ enum SoundSynthesis {
             return Float(thump * 0.9 + blast * 0.8)
         }
         return fadeOut(normalized(samples, peak: 0.85), seconds: 0.1)
+    }
+
+    /// The enemy's guns, heard from across the water.
+    static func distantGun() -> [Float] {
+        var muffle = LowPass(cutoff: 320)
+        let samples = gunshot().map { Float(muffle(Double($0))) }
+        return normalized(samples, peak: 0.45)
     }
 
     /// A shell striking a hull: a deep boom, a roar of flame, a rumble, and crackling.

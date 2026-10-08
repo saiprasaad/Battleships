@@ -390,6 +390,9 @@ final class BattleController {
             effects.removeAll { $0.id == effect.id }
         }
 
+        if !isMine {
+            app.feedback.play(.incoming)
+        }
         if move.result.isHit {
             if isMine {
                 hitsLanded += 1
