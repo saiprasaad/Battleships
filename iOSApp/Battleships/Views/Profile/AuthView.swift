@@ -100,8 +100,23 @@ struct AuthForm: View {
             }
             .frame(maxWidth: .infinity)
             .accessibilityElement(children: .combine)
+        } footer: {
+            agreement
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
         }
         .listRowBackground(Color.clear)
+    }
+
+    /// Players agree to the terms, which don't tolerate abuse, before they can sign in (App Store
+    /// guideline 1.2 asks this of apps where players see each other's content: here, usernames).
+    private var agreement: Text {
+        let markdown = "By continuing, you agree to the [Terms of Use](\(app.termsURL.absoluteString)) "
+            + "and [Privacy Policy](\(app.privacyPolicyURL.absoluteString))."
+        guard let text = try? AttributedString(markdown: markdown) else {
+            return Text("By continuing, you agree to the Terms of Use and Privacy Policy.")
+        }
+        return Text(text)
     }
 
     private var title: String {

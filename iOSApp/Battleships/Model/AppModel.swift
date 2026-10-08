@@ -64,6 +64,8 @@ final class AppModel {
     var privacyPolicyURL: URL { settings.serverURL.appending(path: "privacy") }
     /// The server's support page.
     var supportURL: URL { settings.serverURL.appending(path: "support") }
+    /// The terms players agree to by signing in, with zero tolerance for abuse (App Store guideline 1.2).
+    var termsURL: URL { settings.serverURL.appending(path: "terms") }
 
     // MARK: Session
 

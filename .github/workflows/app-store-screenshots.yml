@@ -1,0 +1,257 @@
+name: App Store screenshots
+
+# Renders the App Store screenshots on simulators of the display sizes App Store Connect asks for,
+# checks that every image has an accepted pixel size, and uploads them as the
+# `app-store-screenshots` artifact: one folder per display size, numbered in upload order.
+#
+# The images come from the same test as CI's `screenshots` artifact
+# (iOSApp/BattleshipsTests/ScreenshotTests.swift), which draws each screen of the app with sample
+# data at the simulator's native resolution. This workflow just runs it on other simulators and
+# picks out the screens worth showing. Because the test draws the app's own window, the system
+# status bar isn't in the images, so there's no need to dress it up (9:41, full battery).
+#
+# Run it from the Actions tab, or push a v* tag. How to upload the results: docs/app-store.md.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: app-store-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The screens to put on the App Store, in upload order: the file the test renders, then the name
+  # it gets in the artifact (after the display size). Reorder or drop lines to change the set.
+  APP_STORE_SCENES: |
+    03-battle-vs-computer 01-battle
+    01-lobby 02-lobby
+    05-new-battle 03-new-battle
+    04-deploy-fleet 04-deploy-fleet
+    07-victory 05-victory
+    14-leaderboard 06-leaderboard
+    06-incoming-challenge 07-challenge
+    09-quick-battle 08-quick-battle
+
+jobs:
+  screenshots:
+    name: Render App Store screenshots
+    runs-on: macos-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | grep -E 'Xcode_[0-9.]+\.app$' | sort -V | tail -n 1)"
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      # One simulator per display size, chosen by name, newest iOS first. If none of the names
+      # exists on the runner, the closest model (same family, newest) is used instead; the size
+      # check further down makes sure it still produces an accepted size.
+      - name: Pick the simulators
+        run: |
+          mkdir -p build
+          xcrun simctl list devices available -j > build/devices.json
+          sdk="$(xcrun --sdk iphonesimulator --show-sdk-version 2>/dev/null || true)"
+          if ! python3 - build/devices.json "$sdk" build/simulators.tsv <<'PY'
+          import json
+          import re
+          import sys
+
+          devices_path, sdk, output_path = sys.argv[1:4]
+          # Xcode can't run tests on an iOS newer than its own SDK.
+          sdk_version = tuple(int(part) for part in re.findall(r"\d+", sdk)[:2]) or (999, 0)
+
+          # slug, display, accepted portrait sizes (App Store Connect, "Screenshot specifications"),
+          # simulators in order of preference, and the family to fall back on.
+          targets = [
+              ("iphone-6.9in", "6.9-inch iPhone", "1320x2868,1290x2796,1260x2736",
+               ["iPhone 17 Pro Max", "iPhone 16 Pro Max", "iPhone 18 Pro Max", "iPhone 15 Pro Max",
+                "iPhone 16 Plus", "iPhone 15 Plus", "iPhone 14 Pro Max", "iPhone Air"],
+               r"^iPhone \d+ Pro Max$"),
+              ("iphone-6.3in", "6.3-inch iPhone", "1206x2622,1179x2556",
+               ["iPhone 17 Pro", "iPhone 17", "iPhone 16 Pro", "iPhone 18 Pro", "iPhone 16",
+                "iPhone 15 Pro", "iPhone 15", "iPhone 14 Pro"],
+               r"^iPhone \d+ Pro$"),
+              ("ipad-13in", "13-inch iPad", "2064x2752,2048x2732",
+               ["iPad Pro 13-inch (M5)", "iPad Pro 13-inch (M4)", "iPad Air 13-inch (M4)",
+                "iPad Air 13-inch (M3)", "iPad Air 13-inch (M2)",
+                "iPad Pro (12.9-inch) (6th generation)"],
+               r"^iPad (Pro|Air) 13-inch"),
+          ]
+
+          available = []
+          for runtime, devices in json.load(open(devices_path))["devices"].items():
+              match = re.search(r"\.iOS-(\d+)-(\d+)", runtime)
+              if not match:
+                  continue
+              version = (int(match.group(1)), int(match.group(2)))
+              if version > sdk_version:
+                  continue
+              for device in devices:
+                  if device.get("isAvailable", True):
+                      available.append((version, device["name"], device["udid"]))
+
+          def newest(devices):
+              # Newest iOS, then the highest model number ("iPhone 17" over "iPhone 16").
+              return max(devices, key=lambda d: (d[0], re.sub(r"\d+", lambda m: m.group().zfill(4), d[1])))
+
+          failed = False
+          rows = []
+          for slug, display, sizes, names, family in targets:
+              choice = None
+              for name in names:
+                  matches = [d for d in available if d[1] == name]
+                  if matches:
+                      choice = newest(matches)
+                      break
+              if choice is None:
+                  matches = [d for d in available if re.search(family, d[1])]
+                  if matches:
+                      choice = newest(matches)
+                      print(f"::warning::None of {', '.join(names)} is available, so the {display} "
+                            f"screenshots use the closest model: {choice[1]}.")
+              if choice is None:
+                  print(f"::error::No simulator for the {display} screenshots. Wanted one of: "
+                        f"{', '.join(names)} (or any match for {family}). Pick from the list below "
+                        f"and add it to the names in .github/workflows/app-store-screenshots.yml.")
+                  failed = True
+                  continue
+              version, name, udid = choice
+              rows.append("\t".join([slug, display, udid, name, f"{version[0]}.{version[1]}", sizes]))
+              print(f"{display}: {name} (iOS {version[0]}.{version[1]}, {udid})")
+          if failed:
+              sys.exit(1)
+          with open(output_path, "w") as output:
+              output.write("".join(row + "\n" for row in rows))
+          PY
+          then
+            echo "Available simulators:"
+            xcrun simctl list devices available
+            exit 1
+          fi
+
+      - name: Build for testing
+        run: |
+          udid="$(head -n 1 build/simulators.tsv | cut -f 3)"
+          xcodebuild build-for-testing \
+            -project iOSApp/Battleships.xcodeproj \
+            -scheme Battleships \
+            -destination "id=$udid" \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            -quiet
+
+      # A freshly erased simulator starts in portrait. Each run writes every screen of the test to
+      # build/renders/<display>/; `-parallel-testing-enabled NO` keeps the tests on this simulator
+      # instead of a clone of it.
+      - name: Render the screens
+        id: render
+        run: |
+          mkdir -p build/results
+          failed=""
+          while IFS=$'\t' read -r slug display udid name runtime sizes <&3; do
+            echo "::group::$display: $name (iOS $runtime)"
+            xcrun simctl shutdown "$udid" > /dev/null 2>&1 || true
+            xcrun simctl erase "$udid"
+            xcrun simctl bootstatus "$udid" -b > /dev/null
+            if ! TEST_RUNNER_SCREENSHOT_DIR="$GITHUB_WORKSPACE/build/renders/$slug" xcodebuild test-without-building \
+                -project iOSApp/Battleships.xcodeproj \
+                -scheme Battleships \
+                -destination "id=$udid" \
+                -derivedDataPath build/DerivedData \
+                -resultBundlePath "build/results/$slug.xcresult" \
+                -parallel-testing-enabled NO \
+                -quiet < /dev/null; then
+              echo "::error::The tests failed on $name. The test results are in the app-store-screenshots-debug artifact."
+              failed="$failed $slug"
+            fi
+            xcrun simctl shutdown "$udid" > /dev/null 2>&1 || true
+            echo "::endgroup::"
+          done 3< build/simulators.tsv
+          [ -z "$failed" ]
+
+      # App Store Connect rejects images of the wrong size, and images with an alpha channel.
+      - name: Check the sizes and collect the screenshots
+        if: ${{ !cancelled() && (steps.render.outcome == 'success' || steps.render.outcome == 'failure') }}
+        run: |
+          problems=0
+          summary="build/summary.md"
+          {
+            echo "### App Store screenshots"
+            echo
+            echo "| Display | Simulator | Screenshots | Size (pixels) |"
+            echo "| --- | --- | --- | --- |"
+          } > "$summary"
+          while IFS=$'\t' read -r slug display udid name runtime sizes <&3; do
+            renders="build/renders/$slug"
+            out="build/app-store-screenshots/$slug"
+            mkdir -p "$out"
+            count=0
+            found=""
+            while read -r scene target <&4; do
+              [ -n "$scene" ] || continue
+              file="$renders/$scene.png"
+              if [ ! -f "$file" ]; then
+                echo "::error::$name didn't render $scene.png. It rendered: $(ls "$renders" 2> /dev/null | tr '\n' ' ')"
+                problems=$((problems + 1))
+                continue
+              fi
+              size="$(sips -g pixelWidth -g pixelHeight "$file" | awk '/pixelWidth:/ { w = $2 } /pixelHeight:/ { h = $2 } END { print w "x" h }')" || size="unreadable"
+              alpha="$(sips -g hasAlpha "$file" | awk '/hasAlpha:/ { print $2 }')" || alpha="unreadable"
+              case ",$sizes," in
+                *",$size,"*) ;;
+                *)
+                  echo "::error::$slug/$scene.png is $size pixels. App Store Connect accepts $sizes (portrait) for the $display display."
+                  problems=$((problems + 1))
+                  continue
+                  ;;
+              esac
+              if [ "$alpha" != "no" ]; then
+                echo "::error::$slug/$scene.png has an alpha channel (hasAlpha: $alpha). App Store Connect rejects screenshots with one."
+                problems=$((problems + 1))
+                continue
+              fi
+              cp "$file" "$out/$slug-$target.png"
+              echo "OK  $slug/$slug-$target.png  $size"
+              count=$((count + 1))
+              found="$size"
+            done 4<<< "$APP_STORE_SCENES"
+            echo "| $display | $name (iOS $runtime) | $count | ${found:-none} |" >> "$summary"
+          done 3< build/simulators.tsv
+          {
+            cat "$summary"
+            echo
+            echo "Download **app-store-screenshots** below and upload each folder to its display size in App Store Connect, in file-name order (docs/app-store.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$problems" -gt 0 ]; then
+            echo "::error::$problems screenshot(s) failed the checks above, so none were uploaded."
+            exit 1
+          fi
+
+      - name: Upload the screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-store-screenshots
+          path: build/app-store-screenshots
+          if-no-files-found: error
+
+      - name: Upload the raw renders and test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-store-screenshots-debug
+          path: |
+            build/renders
+            build/results
+          if-no-files-found: ignore

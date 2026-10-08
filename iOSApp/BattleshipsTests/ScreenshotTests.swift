@@ -1,6 +1,7 @@
 #if canImport(UIKit)
 import BattleshipAPI
 import BattleshipCore
+import Foundation
 import SwiftUI
 import Testing
 import UIKit
@@ -9,6 +10,11 @@ import UIKit
 /// Renders the main screens with sample data and saves them as PNGs, for reviewing the UI without
 /// clicking through it. Only runs when `SCREENSHOT_DIR` is set; CI sets it (via
 /// `TEST_RUNNER_SCREENSHOT_DIR`) and uploads the images as a build artifact.
+///
+/// Full-screen images come out at the simulator's native resolution, opaque and in sRGB: exactly
+/// what App Store Connect accepts. The App Store screenshots workflow
+/// (`.github/workflows/app-store-screenshots.yml`) runs this same test on 6.9-inch and 6.3-inch
+/// iPhone and 13-inch iPad simulators, then picks out the screens to upload (docs/app-store.md).
 @MainActor
 @Suite("Screenshots", .serialized)
 struct ScreenshotTests {
@@ -60,12 +66,16 @@ struct ScreenshotTests {
             NavigationStack { BattleView(route: .solo(showcase.quickBattle), app: app) }.environment(app),
             "09-quick-battle", to: output
         )
-        try await capture(
-            NavigationStack { BattleView(route: .online(showcase.onlineBattle), app: app) }.environment(app),
-            "10-online-battle-ipad", to: output,
-            size: CGSize(width: 1180, height: 820),
-            regularWidth: true
-        )
+        // Both boards side by side, at the size of a landscape iPad, whatever the simulator. On an
+        // iPad every screen here is already an iPad screen, so it's left out there.
+        if UIDevice.current.userInterfaceIdiom != .pad {
+            try await capture(
+                NavigationStack { BattleView(route: .online(showcase.onlineBattle), app: app) }.environment(app),
+                "10-online-battle-ipad", to: output,
+                size: CGSize(width: 1180, height: 820),
+                regularWidth: true
+            )
+        }
         try await capture(WelcomeView {}, "11-welcome", to: output)
         try await capture(
             ZStack {
@@ -86,6 +96,10 @@ struct ScreenshotTests {
             FleetSheet(controller: BattleController(route: .solo(showcase.classicBattle), app: app)).environment(app),
             "13-your-fleet", to: output
         )
+
+        // The rankings come from the server, so this player's app talks to a stand-in for it.
+        let ranked = try Showcase(urlSession: ShowcaseServer.session())
+        try await capture(LeaderboardView().environment(ranked.app), "14-leaderboard", to: output)
     }
 
     private func capture(
@@ -110,7 +124,13 @@ struct ScreenshotTests {
         // Let layout, data loading and entrance animations settle.
         try await Task.sleep(for: .seconds(2.5))
 
-        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+        // At the screen's own scale, so a full-screen capture has the device's native resolution,
+        // and opaque 8-bit sRGB, because App Store Connect rejects screenshots with an alpha channel.
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scene.screen.scale
+        format.opaque = true
+        format.preferredRange = .standard
+        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
             _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
         try #require(image.pngData()).write(to: directory.appendingPathComponent("\(name).png"))
@@ -122,17 +142,23 @@ struct ScreenshotTests {
 /// A signed-in player with a lobby full of games in different states.
 @MainActor
 struct Showcase {
+    /// The player's account, fixed so that the sample leaderboard can mark their row as theirs.
+    nonisolated static let playerID = UUID(uuidString: "C0FFEE00-5EA5-4B47-8B00-000000000001")!
+    nonisolated static let playerName = "Captain_Sai"
+
     let app: AppModel
     let classicBattle: UUID
     let quickBattle: UUID
     let challenge: UUID
     let onlineBattle: UUID
 
-    init() throws {
+    /// - Parameter urlSession: what the app talks to the server with. With the default there's no
+    ///   server, so screens show what they've cached.
+    init(urlSession: URLSession = .shared) throws {
         let defaults = UserDefaults(suiteName: "Showcase-\(UUID().uuidString)")!
         let account = Account(
-            id: UUID(),
-            username: "Captain_Sai",
+            id: Self.playerID,
+            username: Self.playerName,
             createdAt: Date(timeIntervalSinceNow: -86_400 * 120),
             stats: PlayerStats(rating: 1184, wins: 23, losses: 9)
         )
@@ -143,7 +169,8 @@ struct Showcase {
             tokenStorage: InMemoryTokenStorage(token: "showcase"),
             feedback: FeedbackRecorder(),
             soloDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true),
-            defaults: defaults
+            defaults: defaults,
+            urlSession: urlSession
         )
 
         var generator = SeededRandomNumberGenerator(seed: 2026)
@@ -245,5 +272,77 @@ struct Showcase {
             moves: battle.moves
         )
     }
+}
+
+/// Stands in for the game server, so screens that load from it can be shown without one. It
+/// answers with sample rankings, an empty list of blocked players, and otherwise as if the server
+/// were down.
+final class ShowcaseServer: URLProtocol {
+    /// A session whose requests are all answered here, so none leave the device.
+    static func session() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ShowcaseServer.self]
+        return URLSession(configuration: configuration)
+    }
+
+    /// The top ten, with the showcased player in fifth place. Opponents from the showcase lobby
+    /// have the same ratings here.
+    private static let leaderboard: Data = {
+        let captains: [(name: String, rating: Int, wins: Int, losses: Int)] = [
+            ("aubrey", 1355, 41, 17),
+            ("hornblower", 1302, 36, 18),
+            ("nemo", 1240, 30, 19),
+            ("ahab", 1210, 27, 20),
+            (Showcase.playerName, 1184, 23, 9),
+            ("queequeg", 1150, 19, 16),
+            ("drake", 1088, 15, 15),
+            ("marlow", 1061, 12, 13),
+            ("bowline", 1032, 9, 10),
+            ("seawolf", 1004, 6, 8),
+        ]
+        let entries = captains.enumerated().map { index, captain in
+            LeaderboardEntry(
+                rank: index + 1,
+                player: PlayerSummary(
+                    id: captain.name == Showcase.playerName ? Showcase.playerID : UUID(),
+                    username: captain.name,
+                    rating: captain.rating
+                ),
+                wins: captain.wins,
+                losses: captain.losses
+            )
+        }
+        return (try? APICoding.makeEncoder().encode(entries)) ?? Data("[]".utf8)
+    }()
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let path = request.url?.path ?? ""
+        let body: Data? = if path.hasSuffix("/v1/leaderboard") {
+            Self.leaderboard
+        } else if path.hasSuffix("/v1/me/blocked") {
+            Data("[]".utf8)
+        } else {
+            nil
+        }
+        guard let url = request.url, let body,
+              let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 #endif
