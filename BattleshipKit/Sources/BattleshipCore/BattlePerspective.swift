@@ -132,11 +132,15 @@ public struct BattlePerspective: Hashable, Sendable {
         knownEnemyShips.first { $0.contains(coordinate) }
     }
 
-    public func isSunk(_ ship: ShipPlacement) -> Bool {
-        if myFleet.contains(ship) {
-            return sunkFriendlyShips.contains(ship)
-        }
-        return ship.cells.allSatisfy { targetMarks[$0] == .sunk }
+    /// Whether one of my ships has been sunk.
+    public func isMyShipSunk(_ ship: ShipPlacement) -> Bool {
+        sunkFriendlyShips.contains(ship)
+    }
+
+    /// Whether an enemy ship has been sunk. (The boards are separate, so an enemy ship can sit on the
+    /// same squares as one of mine; that's why the two questions are asked separately.)
+    public func isEnemyShipSunk(_ ship: ShipPlacement) -> Bool {
+        ship.cells.allSatisfy { targetMarks[$0] == .sunk }
     }
 
     public var myShipsRemaining: Int { myFleet.count - sunkFriendlyShips.count }

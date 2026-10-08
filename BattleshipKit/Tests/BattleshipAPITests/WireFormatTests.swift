@@ -64,6 +64,24 @@ struct WireFormatTests {
         #expect(try Self.json(ServerEvent.hello) == #"{"type":"hello"}"#)
     }
 
+    @Test func externalSignInAnswersIsASessionOrATicket() throws {
+        let stats = PlayerStats(rating: 1000, wins: 0, losses: 0)
+        let account = Account(id: UUID(), username: "bob", createdAt: Date(timeIntervalSince1970: 0), stats: stats)
+        let returning = ExternalSignInResponse(session: AuthResponse(token: "token", account: account))
+        let data = try APICoding.makeEncoder().encode(returning)
+        #expect(try APICoding.makeDecoder().decode(ExternalSignInResponse.self, from: data) == returning)
+
+        let newcomer = ExternalSignInResponse(signupTicket: "ticket", suggestedUsername: "Captain4821")
+        #expect(try Self.json(newcomer) == #"{"signupTicket":"ticket","suggestedUsername":"Captain4821"}"#)
+    }
+
+    @Test func providersWithoutGoogleStillDecode() throws {
+        let providers = try APICoding.makeDecoder().decode(AuthProviders.self, from: Data(#"{"apple":true}"#.utf8))
+        #expect(providers == AuthProviders(apple: true))
+        #expect(try Self.json(AuthProviders(apple: false, googleClientID: "123-abc.apps.googleusercontent.com"))
+            == #"{"apple":false,"googleClientID":"123-abc.apps.googleusercontent.com"}"#)
+    }
+
     @Test func unknownErrorCodesStillDecode() throws {
         let body = try APICoding.makeDecoder().decode(
             APIErrorBody.self,
@@ -116,6 +134,24 @@ struct CredentialPolicyTests {
     @Test(arguments: ["", "ab", "abcdefghij0123456789x", "has space", "émile", "semi;colon", "dash-name"])
     func rejectsBadUsernames(username: String) {
         #expect(CredentialPolicy.usernameProblem(username) != nil)
+    }
+
+    @Test(arguments: ["Sh1thead", "FUCK_this", "admin", "Ad_min", "x_b1tch_x", "nigg3r", "Bullshit_Bob", "big_fuckup"])
+    func refusesOffensiveAndReservedUsernames(username: String) {
+        #expect(CredentialPolicy.usernameProblem(username) != nil)
+    }
+
+    @Test(arguments: [
+        "Torpedo_Ted", "Admiral_Ackbar", "Grapeshot", "Scuttlebutt", "Mod_Squad_77", "Supporter",
+        "Josh_17", "Ash_17", "Crush_It", "Push_It", "Matt_Watson", "Ashita", "Captain_Sai",
+    ])
+    func allowsInnocentUsernames(username: String) {
+        #expect(CredentialPolicy.usernameProblem(username) == nil)
+    }
+
+    @Test func serversCanBlockMoreWords() {
+        #expect(!CredentialPolicy.isOffensiveOrReserved("Kraken_Fan"))
+        #expect(CredentialPolicy.isOffensiveOrReserved("Kraken_Fan", extraWords: ["KRAKEN"]))
     }
 
     @Test func passwordLength() {

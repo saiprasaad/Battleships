@@ -1,4 +1,5 @@
 import BattleshipAPI
+import BattleshipClient
 import BattleshipCore
 import Foundation
 import Observation
@@ -32,9 +33,18 @@ final class BattleController {
     }
 
     struct Announcement: Identifiable, Equatable {
+        /// Whose doing the news is, which decides how urgently VoiceOver reads it.
+        enum Source: Equatable {
+            /// The result of the player's own shot.
+            case player
+            case opponent
+            case game
+        }
+
         let id = UUID()
         let message: String
         let isGoodNews: Bool
+        let source: Source
     }
 
     /// The feel of the moment, which colours the headline at the top of the battle.
@@ -58,7 +68,10 @@ final class BattleController {
     private(set) var isSubmitting = false
     private(set) var isComputerThinking = false
     private(set) var effects: [ImpactEffect] = []
+    /// News shown in a banner at the top of the battle.
     private(set) var announcement: Announcement?
+    /// Everything VoiceOver should read out: the banners, and news too small for one, like a miss.
+    private(set) var spokenAnnouncement: Announcement?
     private(set) var loadError: String?
     /// Counts the player's hits on the enemy, so the screen can react to each one.
     private(set) var hitsLanded = 0
@@ -68,6 +81,11 @@ final class BattleController {
     @ObservationIgnored private let app: AppModel
     @ObservationIgnored private var seenMoveCount: Int?
     @ObservationIgnored private var hasHandledOutcome = false
+    /// Whether the battle is on screen. Shots that land while it isn't are neither animated nor
+    /// heard, and the end of the game waits to be shown until the player comes back.
+    @ObservationIgnored private var isOnScreen = true
+    /// The computer's reply to the player's shot, called off if the player leaves.
+    @ObservationIgnored private var computerTurn: Task<Void, Never>?
 
     init(route: GameRoute, app: AppModel) {
         self.route = route
@@ -108,9 +126,16 @@ final class BattleController {
         onlineGame?.summary.mode ?? soloMatch?.mode ?? app.online.summary(for: gameID)?.mode
     }
 
+    /// The other player in an online game, for reporting or blocking them.
+    var opponent: PlayerSummary? {
+        guard case .online = route else { return nil }
+        return app.online.summary(for: gameID)?.opponent
+    }
+
     var phase: Phase {
         switch route {
         case let .online(id):
+            guard app.isSignedIn else { return .unavailable("You're signed out. Sign in to see this battle.") }
             if let reason = app.online.removals[id] {
                 return .unavailable(reason == .declined ? "Your challenge was declined." : "This game was called off.")
             }
@@ -212,6 +237,21 @@ final class BattleController {
 
     // MARK: Lifecycle
 
+    func viewDidAppear() {
+        isOnScreen = true
+        app.visibleGameID = gameID
+        // Catch up on anything that happened while the player was away, such as the end of the game.
+        syncMoves()
+    }
+
+    func viewDidDisappear() {
+        isOnScreen = false
+        computerTurn?.cancel()
+        if app.visibleGameID == gameID {
+            app.visibleGameID = nil
+        }
+    }
+
     func load() async {
         switch route {
         case let .online(id):
@@ -281,11 +321,16 @@ final class BattleController {
             app.solo.update(match)
             isSubmitting = false
             syncMoves()
-            await playComputerTurn(in: id)
+            let reply = Task { await playComputerTurn(in: id) }
+            computerTurn = reply
+            await reply.value
         }
     }
 
     func resign() async {
+        guard !isSubmitting else { return }
+        isSubmitting = true
+        defer { isSubmitting = false }
         aimed = nil
         switch route {
         case let .online(id):
@@ -302,8 +347,15 @@ final class BattleController {
     }
 
     func claimVictory() async {
+        guard !isSubmitting else { return }
+        isSubmitting = true
+        defer { isSubmitting = false }
         do {
             try await app.online.claimVictory(gameID)
+        } catch let error as APIError where error.code == .opponentStillHasTime {
+            // This device's clock is ahead of the server's. Catch up with the real deadline.
+            _ = try? await app.online.loadGame(gameID)
+            announce("\(opponentName) still has a moment left to move.", isGoodNews: false, source: .game)
         } catch {
             errorMessage = error.userMessage
         }
@@ -312,6 +364,9 @@ final class BattleController {
 
     /// Answers a challenge with the player's fleet. Returns whether it worked.
     func acceptChallenge(with fleet: [ShipPlacement]) async -> Bool {
+        guard !isSubmitting else { return false }
+        isSubmitting = true
+        defer { isSubmitting = false }
         do {
             _ = try await app.online.accept(gameID, fleet: fleet)
             syncMoves()
@@ -323,6 +378,9 @@ final class BattleController {
     }
 
     func declineChallenge() async -> Bool {
+        guard !isSubmitting else { return false }
+        isSubmitting = true
+        defer { isSubmitting = false }
         do {
             try await app.online.decline(gameID)
             return true
@@ -334,6 +392,9 @@ final class BattleController {
 
     /// Withdraws a game that hasn't started yet.
     func cancelGame() async -> Bool {
+        guard !isSubmitting else { return false }
+        isSubmitting = true
+        defer { isSubmitting = false }
         do {
             try await app.online.cancel(gameID)
             return true
@@ -344,10 +405,16 @@ final class BattleController {
     }
 
     private func playComputerTurn(in id: UUID) async {
-        guard let match = app.solo.match(id), match.isComputersTurn else { return }
+        guard let match = app.solo.match(id), match.isComputersTurn, !isComputerThinking else { return }
         isComputerThinking = true
         // A short pause so the player can watch the shot land, as if the computer were thinking.
-        try? await Task.sleep(for: .milliseconds(Int.random(in: 650...1100)))
+        do {
+            try await Task.sleep(for: .milliseconds(Int.random(in: 650...1100)))
+        } catch {
+            // The player left. The computer fires when the game is opened again.
+            isComputerThinking = false
+            return
+        }
         if var latest = app.solo.match(id), latest.isComputersTurn {
             latest.playComputerTurn()
             app.solo.update(latest)
@@ -371,9 +438,13 @@ final class BattleController {
         }
         seenMoveCount = moves.count
 
-        guard perspective.outcome != nil, !hasHandledOutcome else { return }
+        guard perspective.outcome != nil, !hasHandledOutcome, isOnScreen else { return }
         hasHandledOutcome = true
-        guard !isFirstLook else { return }
+        // Opening a finished game shows how it ended only if the player hasn't seen that yet, e.g.
+        // when the opponent's last shot landed while they were elsewhere.
+        let isNews = !isFirstLook || !app.settings.hasSeenOutcome(of: gameID)
+        app.settings.markOutcomeSeen(of: gameID)
+        guard isNews else { return }
         app.feedback.play(perspective.didWin == true ? .victory : .defeat)
         Task {
             try? await Task.sleep(for: .milliseconds(900))
@@ -382,6 +453,7 @@ final class BattleController {
     }
 
     private func react(to move: Move, in perspective: BattlePerspective) {
+        guard isOnScreen else { return }
         let isMine = move.player == perspective.me
         let effect = ImpactEffect(board: isMine ? .target : .home, coordinate: move.target, isHit: move.result.isHit)
         effects.append(effect)
@@ -401,23 +473,29 @@ final class BattleController {
             }
         }
 
+        let source: Announcement.Source = isMine ? .player : .opponent
         switch move.result {
         case .miss:
             app.feedback.play(.miss)
-            if !isMine {
-                announce("\(opponentName) fired at \(move.target) and missed.", isGoodNews: true)
+            if isMine {
+                // The splash says it all on screen; VoiceOver needs to hear it.
+                announce("Miss at \(move.target).", isGoodNews: false, source: source, showsBanner: false)
+            } else {
+                announce("\(opponentName) fired at \(move.target) and missed.", isGoodNews: true, source: source)
             }
         case .hit:
             app.feedback.play(.hit)
-            announce(isMine ? "Direct hit at \(move.target)!" : "\(opponentName) hit your ship at \(move.target)!", isGoodNews: isMine)
+            announce(isMine ? "Direct hit at \(move.target)!" : "\(opponentName) hit your ship at \(move.target)!", isGoodNews: isMine, source: source)
         case let .sunk(kind):
             app.feedback.play(.sunk)
-            announce(isMine ? "You sank their \(kind.displayName)!" : "\(opponentName) sank your \(kind.displayName)!", isGoodNews: isMine)
+            announce(isMine ? "You sank their \(kind.displayName)!" : "\(opponentName) sank your \(kind.displayName)!", isGoodNews: isMine, source: source)
         }
     }
 
-    private func announce(_ message: String, isGoodNews: Bool) {
-        let announcement = Announcement(message: message, isGoodNews: isGoodNews)
+    private func announce(_ message: String, isGoodNews: Bool, source: Announcement.Source, showsBanner: Bool = true) {
+        let announcement = Announcement(message: message, isGoodNews: isGoodNews, source: source)
+        spokenAnnouncement = announcement
+        guard showsBanner else { return }
         self.announcement = announcement
         Task {
             try? await Task.sleep(for: .milliseconds(2400))

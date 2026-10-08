@@ -11,10 +11,13 @@ import Observation
 @MainActor
 @Observable
 final class AppModel {
+    private static let devicePushTokenKey = "devicePushToken"
+
     let settings: AppSettings
     let api: APIClient
     let session: SessionStore
     let online: OnlineGamesStore
+    let moderation: ModerationStore
     let solo: SoloGamesStore
     let feedback: any FeedbackPlayer
 
@@ -27,7 +30,7 @@ final class AppModel {
     /// Set when the server rejected the saved session, so the app can explain the sign-out.
     var showsSessionExpired = false
 
-    @ObservationIgnored private var devicePushToken: String?
+    @ObservationIgnored private let defaults: UserDefaults
 
     init(
         settings: AppSettings,
@@ -38,20 +41,29 @@ final class AppModel {
         urlSession: URLSession = .shared
     ) {
         self.settings = settings
+        self.defaults = defaults
         let api = APIClient(baseURL: settings.serverURL, session: urlSession)
         self.api = api
         self.session = SessionStore(api: api, tokenStorage: tokenStorage, defaults: defaults)
-        self.online = OnlineGamesStore(api: api)
+        let online = OnlineGamesStore(api: api)
+        self.online = online
+        self.moderation = ModerationStore(api: api, online: online)
         self.solo = SoloGamesStore(directory: soloDirectory)
         self.feedback = feedback
 
-        api.setUnauthorizedHandler { [weak self] in
-            guard let self else { return }
-            Task { @MainActor in self.sessionDidExpire() }
+        api.setUnauthorizedHandler { [weak self, api] in
+            // This runs while the rejected token is still the current one.
+            let rejectedToken = api.token
+            Task { @MainActor in self?.sessionDidExpire(rejectedToken: rejectedToken) }
         }
     }
 
     var isSignedIn: Bool { session.isSignedIn }
+
+    /// The server's privacy policy, which App Store Connect links to as well.
+    var privacyPolicyURL: URL { settings.serverURL.appending(path: "privacy") }
+    /// The server's support page.
+    var supportURL: URL { settings.serverURL.appending(path: "support") }
 
     // MARK: Session
 
@@ -65,22 +77,46 @@ final class AppModel {
         await sessionDidStart()
     }
 
+    func signInWithApple(_ request: AppleSignInRequest, appleUserID: String) async throws -> ExternalSignInOutcome {
+        let outcome = try await session.signInWithApple(request, appleUserID: appleUserID)
+        if outcome == .signedIn {
+            await sessionDidStart()
+        }
+        return outcome
+    }
+
+    func signInWithGoogle(_ request: GoogleSignInRequest) async throws -> ExternalSignInOutcome {
+        let outcome = try await session.signInWithGoogle(request)
+        if outcome == .signedIn {
+            await sessionDidStart()
+        }
+        return outcome
+    }
+
+    /// Finishes a first sign-in with Apple or Google by creating the account.
+    func completeSignup(ticket: String, username: String) async throws {
+        try await session.completeSignup(ticket: ticket, username: username)
+        await sessionDidStart()
+    }
+
     func signOut() async {
         await unregisterDevice()
         await session.signOut()
-        online.reset()
+        forgetOnlineState()
     }
 
     /// Deletes the account on the server. Battles in progress are resigned.
     func deleteAccount() async throws {
         try await session.deleteAccount()
-        online.reset()
+        forgetOnlineState()
     }
 
-    func sessionDidExpire() {
-        guard session.isSignedIn else { return }
+    /// The server turned the session down, or the player stopped using their Apple ID with the app.
+    /// `rejectedToken` guards against a late answer about an earlier session ending this one.
+    func sessionDidExpire(rejectedToken: String?) {
+        guard session.isSignedIn, session.token == rejectedToken else { return }
         session.clear()
-        online.reset()
+        forgetOnlineState()
         showsSessionExpired = true
     }
 
@@ -90,6 +126,7 @@ final class AppModel {
         await signOut()
         settings.serverURL = url
         api.baseURL = url
+        await session.loadProviders()
     }
 
     private func sessionDidStart() async {
@@ -98,10 +135,22 @@ final class AppModel {
         await registerDeviceIfPossible()
     }
 
+    private func forgetOnlineState() {
+        online.reset()
+        moderation.reset()
+    }
+
     // MARK: App lifecycle
 
     func appDidBecomeActive() {
-        guard session.isSignedIn else { return }
+        Task {
+            await session.revokePendingSessions()
+        }
+        guard session.isSignedIn else {
+            // Ready for the sign-in screen, so its Apple and Google buttons don't pop in late.
+            Task { await session.loadProviders() }
+            return
+        }
         online.connect()
         Task {
             await online.refresh()
@@ -121,6 +170,13 @@ final class AppModel {
         #else
         return .production
         #endif
+    }
+
+    /// The last token APNs gave this device. Kept so that signing out can unregister it even in a
+    /// launch where the app didn't register for notifications.
+    private var devicePushToken: String? {
+        get { defaults.string(forKey: Self.devicePushTokenKey) }
+        set { defaults.set(newValue, forKey: Self.devicePushTokenKey) }
     }
 
     func didRegisterForPushNotifications(deviceToken: Data) async {
@@ -159,6 +215,8 @@ final class AppModel {
         try? await api.registerDevice(DeviceRegistration(token: devicePushToken, environment: pushEnvironment))
     }
 
+    /// Stops this device getting the player's notifications. The server also drops the devices a
+    /// session registered when that session ends, so this is a courtesy when signing out works.
     private func unregisterDevice() async {
         guard let devicePushToken, session.isSignedIn else { return }
         try? await api.unregisterDevice(token: devicePushToken)

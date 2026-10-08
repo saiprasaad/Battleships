@@ -53,3 +53,7 @@ xcuserdata/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# Local signing settings (see iOSApp/Config/Battleships.xcconfig)
+iOSApp/Config/Signing.xcconfig
+iOSApp/Config/Signing.entitlements

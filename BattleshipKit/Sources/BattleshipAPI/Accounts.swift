@@ -102,7 +102,57 @@ public enum CredentialPolicy {
         guard allowed else {
             return "Usernames can only use letters, numbers and underscores."
         }
+        if isOffensiveOrReserved(username) {
+            return "That username isn't allowed. Please choose another."
+        }
         return nil
+    }
+
+    /// Strings a username can't contain anywhere, even inside another word, matched after undoing
+    /// common letter-for-digit swaps ("sh1t").
+    public static let blockedUsernameFragments: [String] = [
+        "cunt", "fagg", "fuck", "hitler", "kkk", "nigg", "paedo", "pedophile",
+    ]
+
+    /// Words a username can't start or end a word with (words are split on underscores). Only
+    /// checked at the edges, because they turn up inside innocent words ("Ashita", "Matt_Watson").
+    public static let blockedUsernameWords: [String] = [
+        "asshole", "bastard", "bitch", "dildo", "kike", "penis", "porn", "retard", "shit", "slut",
+        "tranny", "twat", "vagina", "wanker", "whore",
+    ]
+
+    /// Names that could pass for the people running the game.
+    public static let reservedUsernames: Set<String> = [
+        "admin", "administrator", "battleships", "mod", "moderator", "official", "root", "staff",
+        "support", "system",
+    ]
+
+    /// Whether `username` is reserved or contains a blocked word. `extraWords` (a server's own
+    /// list) are matched anywhere, like ``blockedUsernameFragments``.
+    public static func isOffensiveOrReserved(_ username: String, extraWords: [String] = []) -> Bool {
+        let key = normalized(username)
+        if reservedUsernames.contains(key.replacingOccurrences(of: "_", with: "")) {
+            return true
+        }
+        let fragments = blockedUsernameFragments + extraWords.map(normalized).filter { !$0.isEmpty }
+        let words = key.split(separator: "_").map { word in
+            String(word.map { character -> Character in
+                switch character {
+                case "0": "o"
+                case "1": "i"
+                case "3": "e"
+                case "4": "a"
+                case "5": "s"
+                case "7": "t"
+                case "8": "b"
+                default: character
+                }
+            })
+        }
+        return words.contains { word in
+            fragments.contains { word.contains($0) }
+                || blockedUsernameWords.contains { word.hasPrefix($0) || word.hasSuffix($0) }
+        }
     }
 
     /// A reason `password` is unacceptable, or `nil` if it is fine.

@@ -1,4 +1,5 @@
 import BattleshipAPI
+import BattleshipClient
 import BattleshipCore
 import Foundation
 import Testing
@@ -168,6 +169,48 @@ struct OnlineGamesTests {
         #expect(app.online.summaries.isEmpty)
         #expect(app.online.removals[newer.id] == .cancelled)
     }
+
+    @MainActor
+    @Test func removedGamesStayGone() {
+        let (app, _) = makeTestApp()
+        let challenge = detail(status: .invited, moves: 0)
+        app.online.apply(challenge)
+        app.online.remove(challenge.id, reason: .declined)
+
+        // A late response or event about it doesn't bring it back.
+        app.online.apply(challenge)
+        #expect(app.online.summaries.isEmpty)
+        #expect(app.online.details[challenge.id] == nil)
+        #expect(app.online.removals[challenge.id] == .declined)
+    }
+
+    @MainActor
+    @Test func blockingDropsChallengesWithThatPlayer() throws {
+        let (app, _) = makeTestApp()
+        let challenge = detail(status: .invited, moves: 0)
+        let battle = detail(status: .active, moves: 2)
+        app.online.apply(challenge)
+        app.online.apply(battle)
+        let player = try #require(challenge.summary.opponent)
+
+        app.online.removeChallenges(involving: player.id)
+        #expect(app.online.summaries.map(\.id) == [battle.id], "battles in progress carry on")
+    }
+
+    @MainActor
+    @Test func signingOutForgetsEverything() {
+        let (app, _) = makeTestApp()
+        let game = detail(status: .active, moves: 1)
+        app.online.apply(game)
+        app.online.reset()
+        #expect(app.online.summaries.isEmpty)
+        #expect(app.online.details.isEmpty)
+        #expect(!app.online.hasLoaded)
+
+        // A new session can see the same game again.
+        app.online.apply(game)
+        #expect(app.online.details[game.id] != nil)
+    }
 }
 
 @MainActor
@@ -199,6 +242,44 @@ struct SoloGamesTests {
         #expect(store.record.losses[.medium] == 1, "deleting a game keeps the record")
     }
 
+    @Test func oneUnreadableGameDoesNotLoseTheOthers() throws {
+        let saved = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = SoloGamesStore(directory: saved)
+        var match = try store.start(mode: .quick, difficulty: .hard, fleet: Rules.quick.randomFleet())
+        try match.resign()
+        store.update(match)
+
+        // As if a newer version of the app had saved a game and a difficulty this one doesn't know.
+        let file = saved.appendingPathComponent("solo-games.json")
+        var archive = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        archive["matches"] = [["mode": "galactic", "id": UUID().uuidString]] + (archive["matches"] as? [Any] ?? [])
+        var record = try #require(archive["record"] as? [String: Any])
+        record["wins"] = ["impossible", 4, "easy", 2]
+        archive["record"] = record
+        try JSONSerialization.data(withJSONObject: archive).write(to: file)
+
+        let relaunched = SoloGamesStore(directory: saved)
+        #expect(relaunched.matches.map(\.id) == [match.id])
+        #expect(relaunched.record.wins == [.easy: 2])
+        #expect(relaunched.record.losses == [.hard: 1])
+        let copies = try FileManager.default.contentsOfDirectory(atPath: saved.path).filter { $0.hasPrefix("solo-games.unreadable-") }
+        #expect(copies.count == 1, "the original is kept before it's overwritten")
+    }
+
+    @Test func aDamagedFileIsSetAsideNotOverwritten() throws {
+        let saved = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: saved, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: saved.appendingPathComponent("solo-games.json"))
+
+        let store = SoloGamesStore(directory: saved)
+        #expect(store.matches.isEmpty)
+        try store.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
+        let copies = try FileManager.default.contentsOfDirectory(atPath: saved.path).filter { $0.hasPrefix("solo-games.unreadable-") }
+        #expect(copies.count == 1)
+        let copy = try Data(contentsOf: saved.appendingPathComponent(copies[0]))
+        #expect(String(decoding: copy, as: UTF8.self) == "{ not json")
+    }
+
     @Test func keepsALimitedHistory() throws {
         let store = SoloGamesStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         for _ in 0..<(SoloGamesStore.finishedGamesKept + 5) {
@@ -223,9 +304,32 @@ struct SettingsAndLayoutTests {
         #expect(AppSettings.validatedServerURL(input)?.absoluteString == expected)
     }
 
-    @Test(arguments: ["", "battleships.example.com", "ftp://example.com", "http://", "not a url"])
+    @Test(arguments: ["", "battleships.example.com", "ftp://example.com", "http://", "not a url", "http://battleships.example.com"])
     func rejectsBadServerAddresses(input: String) {
         #expect(AppSettings.validatedServerURL(input) == nil)
+    }
+
+    @Test(arguments: ["http://localhost:8080", "http://192.168.1.20:8080", "http://my-mac:8080", "http://10.0.0.5"])
+    func allowsPlainHTTPOnTheLocalNetwork(input: String) {
+        #expect(AppSettings.validatedServerURL(input) != nil)
+    }
+
+    @Test func explainsWhatsWrongWithAnAddress() {
+        #expect(AppSettings.serverAddressProblem("https://battleships.example.com") == nil)
+        #expect(AppSettings.serverAddressProblem("") == nil)
+        #expect(AppSettings.serverAddressProblem("http://battleships.example.com")?.contains("https://") == true)
+        #expect(AppSettings.serverAddressProblem("battleships") != nil)
+    }
+
+    @MainActor
+    @Test func remembersWhichResultsWereSeen() throws {
+        let defaults = try #require(UserDefaults(suiteName: "OutcomeTest-\(UUID().uuidString)"))
+        let settings = AppSettings(defaults: defaults)
+        let game = UUID()
+        #expect(!settings.hasSeenOutcome(of: game))
+        settings.markOutcomeSeen(of: game)
+        #expect(settings.hasSeenOutcome(of: game))
+        #expect(AppSettings(defaults: defaults).hasSeenOutcome(of: game))
     }
 
     @MainActor
@@ -279,5 +383,45 @@ struct SoundEffectTests {
             #expect(samples.prefix(flight).allSatisfy { $0 == 0 }, "silent while the shell is in the air")
             #expect(samples.dropFirst(flight).prefix(4_000).contains { abs($0) > 0.1 }, "then it lands")
         }
+    }
+}
+
+@MainActor
+@Suite("Session")
+struct SessionTests {
+    /// A server that's never there: nothing listens on the discard port.
+    let offline = URL(string: "http://127.0.0.1:9")!
+
+    @Test func aTokenLeftFromAnEarlierInstallIsEndedNotUsed() throws {
+        let defaults = try #require(UserDefaults(suiteName: "SessionTest-\(UUID().uuidString)"))
+        let storage = InMemoryTokenStorage(token: "left-over")
+        let session = SessionStore(api: APIClient(baseURL: offline), tokenStorage: storage, defaults: defaults)
+        #expect(!session.isSignedIn)
+        #expect(storage.loadToken() == nil)
+        #expect(storage.loadPendingRevocations() == ["left-over"])
+    }
+
+    @Test func signingOutOfflineEndsTheSessionLater() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "SessionTest-\(UUID().uuidString)"))
+        let account = Account(id: UUID(), username: "captain", createdAt: Date(), stats: PlayerStats(rating: 1000, wins: 0, losses: 0))
+        defaults.set(try APICoding.makeEncoder().encode(account), forKey: "cachedAccount")
+        let storage = InMemoryTokenStorage(token: "current")
+        let session = SessionStore(api: APIClient(baseURL: offline), tokenStorage: storage, defaults: defaults)
+        #expect(session.isSignedIn)
+        #expect(session.account?.username == "captain")
+
+        await session.signOut()
+        #expect(!session.isSignedIn)
+        #expect(storage.loadPendingRevocations() == ["current"])
+
+        // Still offline: it stays queued.
+        await session.revokePendingSessions()
+        #expect(storage.loadPendingRevocations() == ["current"])
+    }
+
+    @Test func aLateAnswerAboutAnEndedSessionIsIgnored() throws {
+        let (app, _) = makeTestApp()
+        app.sessionDidExpire(rejectedToken: "someone-else")
+        #expect(!app.showsSessionExpired)
     }
 }

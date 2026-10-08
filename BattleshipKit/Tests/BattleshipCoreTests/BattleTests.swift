@@ -161,7 +161,26 @@ struct PerspectiveTests {
         #expect(afterSinking.targetMark(at: Coordinate("F9")!) == .sunk)
         #expect(afterSinking.targetMark(at: Coordinate("F10")!) == .sunk)
         #expect(afterSinking.enemyShipsRemaining == 4)
-        #expect(afterSinking.isSunk(afterSinking.knownEnemyShips[0]))
+        #expect(afterSinking.isEnemyShipSunk(afterSinking.knownEnemyShips[0]))
+    }
+
+    @Test func tellsMyShipsFromEnemyShipsOnTheSameSquares() throws {
+        // Both fleets in exactly the same places: common in the quick mode's single-square boats.
+        let fleet = ["A1", "B3", "C5", "D2", "E4"].map { ShipPlacement(kind: .patrolBoat, origin: Coordinate($0)!, orientation: .horizontal) }
+        var battle = try Battle(mode: .quick, fleetOne: fleet, fleetTwo: fleet)
+        try battle.fire(.one, at: Coordinate("B3")!)
+
+        let view = battle.perspective(for: .one)
+        let sunkEnemy = try #require(view.knownEnemyShips.first)
+        #expect(sunkEnemy.origin == Coordinate("B3"))
+        #expect(view.isEnemyShipSunk(sunkEnemy))
+        #expect(!view.isMyShipSunk(sunkEnemy), "my own boat on B3 is still afloat")
+
+        try battle.fire(.two, at: Coordinate("A1")!)
+        let later = battle.perspective(for: .one)
+        let myA1 = try #require(later.myFleet.first { $0.origin == Coordinate("A1") })
+        #expect(later.isMyShipSunk(myA1))
+        #expect(!later.isEnemyShipSunk(myA1), "the enemy's boat on A1 hasn't been touched")
     }
 
     @Test func revealsEverythingOnceOver() throws {

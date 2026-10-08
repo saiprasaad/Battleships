@@ -1,0 +1,246 @@
+name: TestFlight
+
+# Builds a signed Release archive and uploads it to App Store Connect. Once Apple has processed it
+# (usually 5–30 minutes) the build appears in TestFlight. Run it from the Actions tab, or push a tag
+# such as v1.0.0, which also sets the app's version number.
+#
+# One-time setup (certificate, provisioning profile, App Store Connect API key, server URL):
+# docs/testflight.md.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    name: Build and upload to TestFlight
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      API_BASE_URL: ${{ vars.API_BASE_URL }}
+      BUILD_NUMBER_OFFSET: ${{ vars.BUILD_NUMBER_OFFSET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the setup
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          missing=()
+          for name in BUILD_CERTIFICATE_BASE64 BUILD_PROVISION_PROFILE_BASE64 \
+                      APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_PRIVATE_KEY; do
+            [ -n "${!name}" ] || missing+=("secret $name")
+          done
+          [ -n "$API_BASE_URL" ] || missing+=("variable API_BASE_URL")
+          if [ ${#missing[@]} -gt 0 ]; then
+            for item in "${missing[@]}"; do
+              echo "::error::Missing $item. See docs/testflight.md for how to set it up."
+            done
+            exit 1
+          fi
+          case "$API_BASE_URL" in
+            https://*) ;;
+            *)
+              echo "::error::API_BASE_URL must start with https:// (App Transport Security blocks plain HTTP on iOS)."
+              exit 1
+              ;;
+          esac
+          if curl -fsS --max-time 15 "${API_BASE_URL%/}/health" > /dev/null; then
+            echo "The server at $API_BASE_URL is up."
+          else
+            echo "::warning::Couldn't reach ${API_BASE_URL%/}/health. Testers can still play the computer, but online games need the server."
+          fi
+
+      - name: Select the newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | grep -E 'Xcode_[0-9.]+\.app$' | sort -V | tail -n 1)"
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - name: Install the signing certificate and provisioning profile
+        id: signing
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(openssl rand -base64 24)"
+          certificate="$RUNNER_TEMP/distribution.p12"
+          profile="$RUNNER_TEMP/AppStore.mobileprovision"
+          printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$certificate"
+          printf '%s' "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o "$profile"
+
+          # A throwaway keychain holding just the distribution certificate.
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -P "${P12_PASSWORD:-}" -A -t cert -f pkcs12 -k "$keychain"
+          curl -fsSL -o "$RUNNER_TEMP/AppleWWDRCAG3.cer" https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          security import "$RUNNER_TEMP/AppleWWDRCAG3.cer" -k "$keychain" > /dev/null 2>&1 || true
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          if ! security find-identity -v -p codesigning "$keychain" | grep -q "Apple Distribution"; then
+            echo "::error::BUILD_CERTIFICATE_BASE64 doesn't contain an Apple Distribution certificate with its private key."
+            exit 1
+          fi
+
+          # Read what we need from the profile, and check it's an App Store one.
+          security cms -D -i "$profile" > "$RUNNER_TEMP/profile.plist"
+          read_profile() { /usr/libexec/PlistBuddy -c "Print :$1" "$RUNNER_TEMP/profile.plist" 2>/dev/null; }
+          profile_name="$(read_profile Name)"
+          profile_uuid="$(read_profile UUID)"
+          team_id="$(read_profile TeamIdentifier:0)"
+          app_id="$(read_profile Entitlements:application-identifier)"
+          bundle_id="${app_id#*.}"
+          if read_profile ProvisionedDevices > /dev/null || [ "$(read_profile Entitlements:get-task-allow)" = "true" ]; then
+            echo "::error::BUILD_PROVISION_PROFILE_BASE64 is a development or ad hoc profile. TestFlight needs an App Store Connect distribution profile."
+            exit 1
+          fi
+          case "$profile_name" in
+            *//*) echo "::error::Rename the provisioning profile so its name doesn't contain //."; exit 1 ;;
+          esac
+          for directory in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$directory"
+            cp "$profile" "$directory/$profile_uuid.mobileprovision"
+          done
+
+          # Sign with the capabilities the App ID has, as the profile grants them.
+          entitlements=iOSApp/Config/Signing.entitlements
+          rm -f "$entitlements"
+          entitle() { /usr/libexec/PlistBuddy "$@" "$entitlements" > /dev/null; }
+          push=no
+          if [ -n "$(read_profile Entitlements:aps-environment)" ]; then
+            entitle -c "Add :aps-environment string production"
+            push=yes
+          fi
+          apple_sign_in=no
+          if read_profile Entitlements:com.apple.developer.applesignin > /dev/null; then
+            entitle -c "Add :com.apple.developer.applesignin array" -c "Add :com.apple.developer.applesignin:0 string Default"
+            apple_sign_in=yes
+          else
+            echo "::warning::The App ID doesn't have Sign in with Apple, so the app's \"Continue with Apple\" button won't work. Enable the capability on the App ID, make a new provisioning profile and update BUILD_PROVISION_PROFILE_BASE64 (see docs/sign-in.md)."
+          fi
+
+          # Sign only the app target this way (Swift packages don't take provisioning profiles).
+          {
+            echo "// Written by the TestFlight workflow."
+            echo "DEVELOPMENT_TEAM = $team_id"
+            echo "PRODUCT_BUNDLE_IDENTIFIER = $bundle_id"
+            echo "CODE_SIGN_STYLE = Manual"
+            echo "CODE_SIGN_IDENTITY = Apple Distribution"
+            echo "PROVISIONING_PROFILE_SPECIFIER = $profile_name"
+            if [ -f "$entitlements" ]; then echo "CODE_SIGN_ENTITLEMENTS = Config/Signing.entitlements"; fi
+          } > iOSApp/Config/Signing.xcconfig
+
+          options="$RUNNER_TEMP/ExportOptions.plist"
+          plist() { /usr/libexec/PlistBuddy -c "$1" "$options" > /dev/null; }
+          plist "Add :method string app-store-connect"
+          plist "Add :destination string upload"
+          plist "Add :teamID string $team_id"
+          plist "Add :signingStyle string manual"
+          plist "Add :signingCertificate string Apple Distribution"
+          plist "Add :provisioningProfiles dict"
+          plist "Add :provisioningProfiles:$bundle_id string $profile_name"
+          plist "Add :uploadSymbols bool true"
+          plist "Add :manageAppVersionAndBuildNumber bool false"
+
+          {
+            echo "keychain=$keychain"
+            echo "bundle_id=$bundle_id"
+            echo "team_id=$team_id"
+            echo "push=$push"
+            echo "apple_sign_in=$apple_sign_in"
+          } >> "$GITHUB_OUTPUT"
+          echo "Signing $bundle_id for team $team_id with \"$profile_name\" (push: $push, Sign in with Apple: $apple_sign_in)."
+
+      - name: Work out the version
+        id: version
+        run: |
+          set -euo pipefail
+          build=$(( GITHUB_RUN_NUMBER + ${BUILD_NUMBER_OFFSET:-0} ))
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+              echo "::error::Tags should look like v1.2.3; got $GITHUB_REF_NAME."
+              exit 1
+            fi
+          else
+            version="$(xcodebuild -showBuildSettings -project iOSApp/Battleships.xcodeproj -target Battleships -configuration Release 2>/dev/null \
+              | awk -F ' = ' '/^ *MARKETING_VERSION = / { print $2; exit }')"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Version $version ($build)"
+
+      - name: Archive
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project iOSApp/Battleships.xcodeproj \
+            -scheme Battleships \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Battleships.xcarchive" \
+            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}" \
+            API_BASE_URL="$API_BASE_URL" \
+            -quiet
+
+      - name: Upload to App Store Connect
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/AuthKey_$APP_STORE_CONNECT_KEY_ID.p8"
+          printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$key"
+          # Accept the .p8 file's contents either as-is or base64-encoded.
+          if ! grep -q "BEGIN PRIVATE KEY" "$key"; then
+            printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" | base64 --decode -o "$key"
+          fi
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Battleships.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$key" \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Uploaded Battleships ${{ steps.version.outputs.version }} (${{ steps.version.outputs.build }})"
+            echo
+            echo "- Bundle ID: \`${{ steps.signing.outputs.bundle_id }}\`"
+            echo "- Server: $API_BASE_URL"
+            echo "- Push notifications: ${{ steps.signing.outputs.push }}"
+            echo "- Sign in with Apple: ${{ steps.signing.outputs.apple_sign_in }}"
+            echo
+            echo "Apple processes the build before it shows up in App Store Connect → TestFlight (usually 5–30 minutes)."
+            echo "Internal testers get it automatically if their group has automatic distribution on; external groups need Beta App Review."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up signing material
+        if: always()
+        run: |
+          if [ -n "${{ steps.signing.outputs.keychain }}" ]; then
+            security delete-keychain "${{ steps.signing.outputs.keychain }}" || true
+          fi
+          rm -f "$RUNNER_TEMP"/*.p12 "$RUNNER_TEMP"/*.p8 "$RUNNER_TEMP"/*.mobileprovision iOSApp/Config/Signing.xcconfig iOSApp/Config/Signing.entitlements

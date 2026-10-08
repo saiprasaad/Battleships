@@ -1,5 +1,5 @@
 import BattleshipAPI
-import BattleshipClient
+@testable import BattleshipClient
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -25,6 +25,22 @@ struct APIClientTests {
         #expect(client.eventsRequest() != nil)
         client.token = nil
         #expect(client.eventsRequest() == nil)
+    }
+
+    @Test func onlyTheCurrentSessionCanExpire() {
+        let client = APIClient(baseURL: URL(string: "http://localhost:8080")!, token: "first")
+        let expiries = Locked(0)
+        client.setUnauthorizedHandler { expiries.withLock { $0 += 1 } }
+
+        client.handleUnauthorized(rejectedToken: "first")
+        #expect(expiries.withLock { $0 } == 1)
+
+        // A late rejection of an old session (signed out, or replaced by a new sign-in) is ignored.
+        client.token = "second"
+        client.handleUnauthorized(rejectedToken: "first")
+        client.token = nil
+        client.handleUnauthorized(rejectedToken: "second")
+        #expect(expiries.withLock { $0 } == 1)
     }
 
     @Test func authenticatedCallsFailFastWithoutAToken() async {

@@ -19,14 +19,20 @@ final class Haptics: FeedbackPlayer {
     func play(_ event: FeedbackEvent) {
         guard isEnabled() else { return }
         switch event {
-        case .select, .aim:
+        case .select:
             selection.selectionChanged()
+        case .aim:
+            selection.selectionChanged()
+            // Firing usually comes next; waking the engine now keeps it in step with the shot.
+            medium.prepare()
         case .place:
             light.impactOccurred()
         case .invalid:
             notification.notificationOccurred(.warning)
         case .fire:
             medium.impactOccurred()
+            heavy.prepare()
+            soft.prepare()
         case .incoming:
             light.impactOccurred()
         case .miss:

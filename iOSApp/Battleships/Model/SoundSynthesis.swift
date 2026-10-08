@@ -7,6 +7,11 @@ enum SoundSynthesis {
     /// Shells take this long to land, so the explosion or splash starts with silence.
     static let flightTime: Double = 0.16
 
+    /// Every sound, keyed by event. Takes a moment, so call it off the main thread.
+    static func allSamples() -> [FeedbackEvent: [Float]] {
+        Dictionary(uniqueKeysWithValues: FeedbackEvent.allCases.map { ($0, samples(for: $0)) })
+    }
+
     /// Mono samples in −1…1 for `event`.
     static func samples(for event: FeedbackEvent) -> [Float] {
         switch event {
@@ -160,15 +165,17 @@ enum SoundSynthesis {
     /// Notes with a brassy tone: a few harmonics, quieter as they go up.
     static func chords(_ notes: [Note], seconds: Double, brightness: Double, peak: Float) -> [Float] {
         var samples = [Float](repeating: 0, count: frames(seconds))
+        let harmonics = 1...4
+        let strengths = harmonics.map { pow(brightness * 0.55, Double($0 - 1)) / Double($0) }
         for note in notes {
             let start = frames(note.start)
+            let speeds = harmonics.map { 2 * .pi * note.frequency * Double($0) }
             for offset in 0..<frames(note.length + 0.4) where start + offset < samples.count {
                 let t = time(offset)
                 let level = t < 0.015 ? t / 0.015 : exp(-(t - 0.015) / (note.length * 0.6))
                 var tone = 0.0
-                for harmonic in 1...4 {
-                    let strength = pow(brightness * 0.55, Double(harmonic - 1)) / Double(harmonic)
-                    tone += sin(2 * .pi * note.frequency * Double(harmonic) * t) * strength
+                for index in strengths.indices {
+                    tone += sin(speeds[index] * t) * strengths[index]
                 }
                 samples[start + offset] += Float(tone * level)
             }

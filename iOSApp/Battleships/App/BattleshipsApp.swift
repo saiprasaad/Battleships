@@ -14,6 +14,7 @@ struct BattleshipsApp: App {
             switch scenePhase {
             case .active:
                 appDelegate.model.appDidBecomeActive()
+                appDelegate.checkAppleIDCredential()
             case .background:
                 appDelegate.model.appDidEnterBackground()
             default:

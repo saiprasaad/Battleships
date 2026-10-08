@@ -40,8 +40,12 @@ public final class APIClient: Sendable {
         state.withLock { $0.onUnauthorized = handler }
     }
 
-    func handleUnauthorized() {
-        let handler = state.withLock { $0.onUnauthorized }
+    /// Runs the unauthorized handler, but only if `rejectedToken` is still the current token: a late
+    /// 401 for a session that has already ended (signed out, or replaced by a new sign-in) is ignored.
+    func handleUnauthorized(rejectedToken: String?) {
+        let handler = state.withLock { state in
+            rejectedToken != nil && state.token == rejectedToken ? state.onUnauthorized : nil
+        }
         handler?()
     }
 
@@ -55,9 +59,33 @@ public final class APIClient: Sendable {
         try await send("POST", "v1/auth/login", body: credentials, authenticated: false)
     }
 
+    /// The ways of signing in the server offers besides a username and password.
+    public func authProviders() async throws -> AuthProviders {
+        try await send("GET", "v1/auth/providers", authenticated: false)
+    }
+
+    public func signInWithApple(_ request: AppleSignInRequest) async throws -> ExternalSignInResponse {
+        try await send("POST", "v1/auth/apple", body: request, authenticated: false)
+    }
+
+    public func signInWithGoogle(_ request: GoogleSignInRequest) async throws -> ExternalSignInResponse {
+        try await send("POST", "v1/auth/google", body: request, authenticated: false)
+    }
+
+    /// Creates the account for a first sign-in with Apple or Google.
+    public func completeSignup(_ request: CompleteSignupRequest) async throws -> AuthResponse {
+        try await send("POST", "v1/auth/complete-signup", body: request, authenticated: false)
+    }
+
     /// Revokes the current session token on the server.
     public func signOut() async throws {
         try await sendWithoutResponse("POST", "v1/auth/logout")
+    }
+
+    /// Revokes a session that is no longer the current one, such as one that couldn't be signed
+    /// out while offline. Throws ``APIError/unauthorized`` if the server had already ended it.
+    public func signOut(token: String) async throws {
+        _ = try await perform("POST", "v1/auth/logout", query: [], body: nil, authenticated: true, token: token)
     }
 
     public func account() async throws -> Account {
@@ -77,6 +105,31 @@ public final class APIClient: Sendable {
 
     public func leaderboard() async throws -> [LeaderboardEntry] {
         try await send("GET", "v1/leaderboard")
+    }
+
+    // MARK: Blocking and reporting
+
+    /// Players you've blocked. They can't challenge you, and matchmaking never pairs you.
+    public func blockedPlayers() async throws -> [PlayerSummary] {
+        try await send("GET", "v1/me/blocked")
+    }
+
+    /// Blocks a player. Pending challenges between you are withdrawn; games in progress carry on.
+    public func block(playerID: UUID) async throws {
+        try await sendWithoutResponse("PUT", "v1/players/\(playerID.uuidString)/block")
+    }
+
+    public func unblock(playerID: UUID) async throws {
+        try await sendWithoutResponse("DELETE", "v1/players/\(playerID.uuidString)/block")
+    }
+
+    /// Reports a player to the people running the server.
+    public func report(playerID: UUID, reason: ReportReason, gameID: UUID? = nil) async throws {
+        try await sendWithoutResponse(
+            "POST",
+            "v1/players/\(playerID.uuidString)/report",
+            body: ReportPlayerRequest(reason: reason, gameID: gameID)
+        )
     }
 
     // MARK: Games
@@ -135,6 +188,11 @@ public final class APIClient: Sendable {
 
     /// The WebSocket request for the realtime event stream, or `nil` when signed out.
     public func eventsRequest() -> URLRequest? {
+        eventsConnection()?.request
+    }
+
+    /// The event stream request together with the token it carries.
+    func eventsConnection() -> (request: URLRequest, token: String)? {
         guard let token,
               var components = URLComponents(url: url(for: "v1/events"), resolvingAgainstBaseURL: false)
         else { return nil }
@@ -142,7 +200,7 @@ public final class APIClient: Sendable {
         guard let url = components.url else { return nil }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        return request
+        return (request, token)
     }
 
     // MARK: Plumbing
@@ -186,7 +244,8 @@ public final class APIClient: Sendable {
         _ path: String,
         query: [URLQueryItem],
         body: Data?,
-        authenticated: Bool
+        authenticated: Bool,
+        token explicitToken: String? = nil
     ) async throws -> Data {
         var url = url(for: path)
         if !query.isEmpty, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
@@ -201,9 +260,10 @@ public final class APIClient: Sendable {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
+        let sentToken = authenticated ? explicitToken ?? token : nil
         if authenticated {
-            guard let token else { throw APIError.unauthorized }
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            guard let sentToken else { throw APIError.unauthorized }
+            request.setValue("Bearer \(sentToken)", forHTTPHeaderField: "Authorization")
         }
 
         let data: Data
@@ -223,7 +283,7 @@ public final class APIClient: Sendable {
         case 200..<300:
             return data
         case 401 where authenticated:
-            handleUnauthorized()
+            handleUnauthorized(rejectedToken: sentToken)
             throw APIError.unauthorized
         default:
             if let body = try? APICoding.makeDecoder().decode(APIErrorBody.self, from: data) {

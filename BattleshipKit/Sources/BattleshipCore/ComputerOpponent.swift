@@ -108,9 +108,11 @@ public struct ComputerOpponent: Sendable, Hashable {
         let open = Set(options)
 
         if !intel.openHits.isEmpty {
+            // Sets iterate in a different order on every launch; sort so a seed always replays the same game.
+            let hits = intel.openHits.sorted()
             // Two or more hits in a line: keep going along that line.
             var lineEnds: [Coordinate] = []
-            for hit in intel.openHits {
+            for hit in hits {
                 for (dr, dc) in [(0, 1), (1, 0)] {
                     let next = hit.offsetBy(rows: dr, columns: dc)
                     guard intel.openHits.contains(next) else { continue }
@@ -130,7 +132,7 @@ public struct ComputerOpponent: Sendable, Hashable {
                 return target
             }
             // A lone hit (or a blocked line): try its neighbours.
-            let neighbors = intel.openHits.flatMap(\.orthogonalNeighbors).filter(open.contains)
+            let neighbors = hits.flatMap(\.orthogonalNeighbors).filter(open.contains)
             if let target = neighbors.randomElement(using: &generator) {
                 return target
             }

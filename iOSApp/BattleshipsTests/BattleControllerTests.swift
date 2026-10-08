@@ -101,16 +101,83 @@ struct BattleControllerTests {
 
     @Test func reopeningAFinishedGameDoesNotReplayIt() async throws {
         let (app, feedback) = makeTestApp()
+        let match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
+        let first = BattleController(route: .solo(match.id), app: app)
+        await first.load()
+        await first.resign()
+        #expect(feedback.events.filter { $0 == .defeat }.count == 1)
+
+        let reopened = BattleController(route: .solo(match.id), app: app)
+        await reopened.load()
+        #expect(reopened.phase == .finished)
+        #expect(reopened.effects.isEmpty)
+        #expect(feedback.events.filter { $0 == .defeat }.count == 1, "the defeat isn't replayed")
+        #expect(!reopened.showsOutcome)
+    }
+
+    @Test func aGameThatEndedElsewhereShowsItsResultOnce() async throws {
+        let (app, feedback) = makeTestApp()
+        // As if the opponent's last shot landed while the player was in the lobby.
         var match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
         try match.resign()
         app.solo.update(match)
 
         let controller = BattleController(route: .solo(match.id), app: app)
         await controller.load()
-        #expect(controller.phase == .finished)
-        #expect(controller.effects.isEmpty)
-        #expect(!feedback.events.contains(.defeat))
-        #expect(!controller.showsOutcome)
+        #expect(feedback.events.contains(.defeat))
+        for _ in 0..<30 where !controller.showsOutcome {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(controller.showsOutcome)
+
+        let reopened = BattleController(route: .solo(match.id), app: app)
+        await reopened.load()
+        #expect(feedback.events.filter { $0 == .defeat }.count == 1)
+    }
+
+    @Test func leavingCallsOffTheComputersReply() async throws {
+        let (app, feedback) = makeTestApp()
+        let match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
+        let controller = BattleController(route: .solo(match.id), app: app)
+        await controller.load()
+
+        controller.tapTarget(Coordinate("A1")!)
+        let firing = Task { await controller.fire() }
+        for _ in 0..<50 where !controller.isComputerThinking {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(controller.isComputerThinking)
+        controller.viewDidDisappear()
+        await firing.value
+
+        #expect(app.solo.match(match.id)?.battle.moves.count == 1, "the computer holds its fire")
+        #expect(!feedback.events.contains(.incoming))
+
+        // Back on the screen, the computer takes its turn.
+        let reopened = BattleController(route: .solo(match.id), app: app)
+        reopened.viewDidAppear()
+        await reopened.load()
+        #expect(app.solo.match(match.id)?.battle.moves.count == 2)
+    }
+
+    @Test func missesAreReadOutWithoutABanner() async throws {
+        let (app, _) = makeTestApp()
+        let match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
+        let controller = BattleController(route: .solo(match.id), app: app)
+        await controller.load()
+
+        let occupied = Set(match.battle.fleet(of: ComputerMatch.computer).flatMap(\.cells))
+        let water = try #require(Rules.quick.allCoordinates.first { !occupied.contains($0) })
+        controller.tapTarget(water)
+        let firing = Task { await controller.fire() }
+        // Before the computer replies, only the player's miss has been announced.
+        for _ in 0..<50 where controller.spokenAnnouncement == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(controller.spokenAnnouncement?.message == "Miss at \(water).")
+        #expect(controller.spokenAnnouncement?.source == .player)
+        #expect(controller.announcement == nil, "a miss gets no banner")
+        await firing.value
     }
 
     @Test func missingGamesAreReportedAsUnavailable() async {

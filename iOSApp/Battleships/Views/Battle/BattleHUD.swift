@@ -95,14 +95,14 @@ struct RosterShip: Identifiable, Hashable {
         for kind in perspective.rules.fleet {
             guard let index = remaining.firstIndex(where: { $0.kind == kind }) else { continue }
             let ship = remaining.remove(at: index)
-            roster.append(RosterShip(id: roster.count, kind: kind, isSunk: perspective.isSunk(ship)))
+            roster.append(RosterShip(id: roster.count, kind: kind, isSunk: perspective.isMyShipSunk(ship)))
         }
         return roster
     }
 
     /// The enemy's fleet, with the ships sunk so far crossed off.
     static func enemy(in perspective: BattlePerspective) -> [RosterShip] {
-        var sunk = perspective.knownEnemyShips.filter { perspective.isSunk($0) }.map(\.kind)
+        var sunk = perspective.knownEnemyShips.filter { perspective.isEnemyShipSunk($0) }.map(\.kind)
         var roster: [RosterShip] = []
         for (index, kind) in perspective.rules.fleet.enumerated() {
             if let match = sunk.firstIndex(of: kind) {
@@ -247,7 +247,7 @@ private struct ShipStatusList: View {
                 ShipStatusRow(
                     kind: ship.kind,
                     hits: ship.cells.filter { perspective.homeMark(at: $0) != nil }.count,
-                    isSunk: perspective.isSunk(ship)
+                    isSunk: perspective.isMyShipSunk(ship)
                 )
             }
         }

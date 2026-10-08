@@ -5,8 +5,18 @@
 // - Debug builds use a server on this Mac (run `swift run --package-path Server BattleshipServer serve`).
 //   The iOS Simulator shares the Mac's network, so localhost works. On a real iPhone, use your Mac's
 //   Bonjour name instead, e.g. http://my-mac.local:8080.
-// - Release builds should point at your deployed server (HTTPS).
+// - Release builds should point at your deployed server (HTTPS). The TestFlight workflow sets it
+//   from the API_BASE_URL repository variable, so you don't have to edit this file to ship.
 //
 // Note: "//" starts a comment in .xcconfig files, so the URLs below write it as "/$()/".
 API_BASE_URL[config=Debug] = http:/$()/localhost:8080
 API_BASE_URL[config=Release] = https:/$()/battleships.example.com
+
+// Signing. Automatic signing works for running on your own devices: choose your team under
+// Signing & Capabilities. To sign without touching the project file, put your settings (for example
+// `DEVELOPMENT_TEAM = ABCDE12345`) in Config/Signing.xcconfig, which git ignores. The TestFlight
+// workflow writes that file to sign with an App Store distribution certificate.
+PRODUCT_BUNDLE_IDENTIFIER = com.saiprasaad.Battleships
+CODE_SIGN_STYLE = Automatic
+
+#include? "Signing.xcconfig"

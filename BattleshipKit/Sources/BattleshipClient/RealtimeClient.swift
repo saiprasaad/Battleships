@@ -48,23 +48,36 @@ public final class RealtimeClient: Sendable {
         continuation: AsyncStream<RealtimeUpdate>.Continuation
     ) async {
         var consecutiveFailures = 0
+        let clock = ContinuousClock()
 
         while !Task.isCancelled {
-            guard let request = api.eventsRequest() else { break }
-            let socket = session.webSocketTask(with: request)
+            guard let connection = api.eventsConnection() else { break }
+            let socket = session.webSocketTask(with: connection.request)
             socket.resume()
 
+            // A connection can die without either end noticing (a phone losing signal). If a ping
+            // goes unanswered until the next one is due, give up on it and reconnect.
             let pinger = Task {
+                let awaitingPong = Locked(false)
                 while !Task.isCancelled {
                     try? await Task.sleep(for: pingInterval)
                     guard !Task.isCancelled else { return }
+                    if awaitingPong.withLock({ $0 }) {
+                        socket.cancel(with: .goingAway, reason: nil)
+                        return
+                    }
+                    awaitingPong.withLock { $0 = true }
                     socket.sendPing { error in
-                        if error != nil { socket.cancel(with: .goingAway, reason: nil) }
+                        if error != nil {
+                            socket.cancel(with: .goingAway, reason: nil)
+                        } else {
+                            awaitingPong.withLock { $0 = false }
+                        }
                     }
                 }
             }
 
-            var connected = false
+            var connectedAt: ContinuousClock.Instant?
             do {
                 while !Task.isCancelled {
                     let message = try await withTaskCancellationHandler {
@@ -74,8 +87,7 @@ public final class RealtimeClient: Sendable {
                     }
                     guard let event = decode(message) else { continue }
                     if case .hello = event {
-                        connected = true
-                        consecutiveFailures = 0
+                        connectedAt = clock.now
                         continuation.yield(.connected)
                     } else {
                         continuation.yield(.event(event))
@@ -87,19 +99,26 @@ public final class RealtimeClient: Sendable {
 
             pinger.cancel()
             socket.cancel(with: .goingAway, reason: nil)
-            if connected {
+            if connectedAt != nil {
                 continuation.yield(.disconnected)
             }
             if Task.isCancelled { break }
 
             if (socket.response as? HTTPURLResponse)?.statusCode == 401 {
-                api.handleUnauthorized()
+                api.handleUnauthorized(rejectedToken: connection.token)
                 break
             }
 
+            // Only a connection that stayed up a while counts as recovered; one that's dropped
+            // straight after connecting keeps backing off rather than reconnecting every second.
+            if let connectedAt, clock.now - connectedAt > .seconds(30) {
+                consecutiveFailures = 0
+            }
             consecutiveFailures += 1
-            let backoff = min(30.0, pow(2.0, Double(consecutiveFailures - 1))) + Double.random(in: 0..<1)
-            try? await Task.sleep(for: .milliseconds(Int(backoff * 1000)))
+            // "Full jitter", so clients spread out instead of all reconnecting at once after a restart.
+            let ceiling = min(30.0, pow(2.0, Double(consecutiveFailures - 1)))
+            let delay = 0.25 + Double.random(in: 0...ceiling)
+            try? await Task.sleep(for: .milliseconds(Int(delay * 1000)))
         }
         continuation.finish()
     }

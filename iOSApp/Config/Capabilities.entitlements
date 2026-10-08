@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Push notifications and Sign in with Apple, for running from Xcode with a paid Apple Developer
+  Program team. Free (Personal Team) accounts can't use either capability, so the project doesn't
+  use this file by default. To opt in, add this line to Config/Signing.xcconfig:
+
+      CODE_SIGN_ENTITLEMENTS = Config/Capabilities.entitlements
+
+  TestFlight builds don't use it: the workflow writes its own from the provisioning profile.
+-->
+<dict>
+	<key>aps-environment</key>
+	<string>development</string>
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
+</dict>
+</plist>

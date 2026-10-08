@@ -18,7 +18,7 @@ struct TargetBoard: View {
 
             ForEach(perspective.knownEnemyShips, id: \.self) { ship in
                 let rect = geometry.rect(for: ship).insetBy(dx: geometry.cell * 0.1, dy: geometry.cell * 0.1)
-                ShipView(ship: ship, isSunk: perspective.isSunk(ship))
+                ShipView(ship: ship, isSunk: perspective.isEnemyShipSunk(ship))
                     .frame(width: rect.width, height: rect.height)
                     .position(x: rect.midX, y: rect.midY)
                     .transition(.scale(scale: 1.4).combined(with: .opacity))
@@ -91,7 +91,7 @@ struct HomeBoard: View {
         BoardView(rules: perspective.rules, showsLabels: !isMiniature) { geometry in
             ForEach(perspective.myFleet, id: \.self) { ship in
                 let rect = geometry.rect(for: ship).insetBy(dx: geometry.cell * 0.1, dy: geometry.cell * 0.1)
-                ShipView(ship: ship, isSunk: perspective.isSunk(ship))
+                ShipView(ship: ship, isSunk: perspective.isMyShipSunk(ship))
                     .frame(width: rect.width, height: rect.height)
                     .position(x: rect.midX, y: rect.midY)
                     .accessibilityHidden(true)

@@ -30,6 +30,12 @@ public struct APIErrorCode: RawRepresentable, Codable, Sendable, Hashable, Expre
     public static let invalidPassword: APIErrorCode = "invalid_password"
     public static let usernameTaken: APIErrorCode = "username_taken"
     public static let invalidCredentials: APIErrorCode = "invalid_credentials"
+    /// An Apple or Google token that didn't verify (bad signature, wrong app, expired, wrong nonce).
+    public static let invalidIdentityToken: APIErrorCode = "invalid_identity_token"
+    /// The server isn't set up for that way of signing in.
+    public static let signInMethodUnavailable: APIErrorCode = "sign_in_method_unavailable"
+    /// A signup ticket that expired or was already used: sign in with Apple or Google again.
+    public static let signupTicketInvalid: APIErrorCode = "signup_ticket_invalid"
 
     public static let invalidFleet: APIErrorCode = "invalid_fleet"
     public static let playerNotFound: APIErrorCode = "player_not_found"
@@ -42,6 +48,7 @@ public struct APIErrorCode: RawRepresentable, Codable, Sendable, Hashable, Expre
     public static let outOfBounds: APIErrorCode = "out_of_bounds"
     public static let gameOver: APIErrorCode = "game_over"
     public static let opponentStillHasTime: APIErrorCode = "opponent_still_has_time"
+    public static let playerBlocked: APIErrorCode = "player_blocked"
 }
 
 /// The JSON body of every non-2xx response: `{"code": "not_your_turn", "message": "It's not your turn."}`.
