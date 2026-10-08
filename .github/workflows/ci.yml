@@ -13,6 +13,7 @@ jobs:
   linux:
     name: Engine + server tests (Linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container: swift:6.3-noble
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +33,7 @@ jobs:
   server-macos:
     name: Server tests (macOS)
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Select the newest Xcode
@@ -53,6 +55,7 @@ jobs:
   ios:
     name: iOS app (build + unit tests)
     runs-on: macos-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: Select the newest Xcode
@@ -109,6 +112,7 @@ jobs:
   docker:
     name: Server Docker image
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
