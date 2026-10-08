@@ -5,8 +5,9 @@ struct SailingShip: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
-            let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
+        let isStill = Motion.holdsStill(reduceMotion: reduceMotion)
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: isStill)) { timeline in
+            let time = isStill ? 0 : timeline.date.timeIntervalSinceReferenceDate
             WarshipProfile()
                 .fill(
                     LinearGradient(

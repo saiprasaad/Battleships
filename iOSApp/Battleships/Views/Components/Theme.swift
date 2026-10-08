@@ -41,6 +41,10 @@ enum Theme {
 
     /// Rows in lists laid over the ocean.
     static let rowBackground = Color(red: 0.62, green: 0.80, blue: 1.0).opacity(0.08)
+
+    /// Secondary text laid straight on the ocean, such as list footers. `.secondary` only reaches
+    /// about 3.5:1 against the brighter water; this stays above 4.5:1.
+    static let secondaryText = Color.white.opacity(0.75)
 }
 
 extension View {
@@ -140,8 +144,9 @@ private struct ArmedHalo: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
-            let progress = reduceMotion ? 0.3 : Motion.cycle(timeline.date, period: 1.1)
+        let isStill = Motion.holdsStill(reduceMotion: reduceMotion)
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: isStill)) { timeline in
+            let progress = isStill ? 0.3 : Motion.cycle(timeline.date, period: 1.1)
             ZStack {
                 Capsule()
                     .stroke(Theme.flame, lineWidth: 2)

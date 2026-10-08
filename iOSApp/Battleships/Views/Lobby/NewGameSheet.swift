@@ -6,6 +6,7 @@ import SwiftUI
 struct NewGameSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var draft: NewGameDraft
     @State private var showsPlacement = false
     @State private var showsSignIn = false
@@ -21,12 +22,15 @@ struct NewGameSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    HStack(spacing: 10) {
+                    // At accessibility sizes the cards stack, so their titles have room.
+                    let isStacked = dynamicTypeSize.isAccessibilitySize
+                    let cards = isStacked ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
+                    cards {
                         ForEach(OpponentChoice.allCases) { choice in
                             Button {
                                 withAnimation(.snappy) { draft.opponent = choice }
                             } label: {
-                                OpponentCard(choice: choice, isSelected: draft.opponent == choice)
+                                OpponentCard(choice: choice, isSelected: draft.opponent == choice, isStacked: isStacked)
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel(choice.title)
@@ -40,6 +44,7 @@ struct NewGameSheet: View {
                     SheetSectionHeader(title: "Opponent")
                 } footer: {
                     Text(draft.opponent.subtitle)
+                        .foregroundStyle(Theme.secondaryText)
                         .contentTransition(.opacity)
                 }
 
@@ -48,6 +53,7 @@ struct NewGameSheet: View {
                         Button("Sign in to play online") { showsSignIn = true }
                     } footer: {
                         Text("Online battles need an account so your opponent can find you.")
+                            .foregroundStyle(Theme.secondaryText)
                     }
                     .listRowBackground(Theme.rowBackground)
                 }
@@ -166,28 +172,40 @@ struct NewGameSheet: View {
     }
 }
 
-/// One of the three ways to find an opponent, as a selectable card.
+/// One of the three ways to find an opponent, as a selectable card. Stacked cards are full-width
+/// rows with the whole title, which wraps if it must.
 private struct OpponentCard: View {
     let choice: OpponentChoice
     let isSelected: Bool
+    var isStacked = false
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
-        VStack(spacing: 9) {
+        let layout = isStacked ? AnyLayout(HStackLayout(spacing: 14)) : AnyLayout(VStackLayout(spacing: 9))
+        layout {
             Image(systemName: choice.systemImage)
                 .font(.system(size: 26, weight: .medium))
                 .foregroundStyle(isSelected ? Theme.reticle : Color.white.opacity(0.55))
                 .glow(isSelected ? Theme.reticle : .clear, radius: 8)
                 .symbolEffect(.bounce, value: isSelected)
                 .frame(height: 30)
-            Text(choice.shortTitle)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(isSelected ? .white : .secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+            if isStacked {
+                Text(choice.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(isSelected ? .white : .secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(choice.shortTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(isSelected ? .white : .secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 18)
+        .padding(.vertical, isStacked ? 14 : 18)
+        .padding(.horizontal, isStacked ? 16 : 0)
         .background(shape.fill(isSelected ? Theme.reticle.opacity(0.16) : Theme.rowBackground))
         .overlay(shape.strokeBorder(isSelected ? Theme.reticle.opacity(0.9) : Color.white.opacity(0.1), lineWidth: isSelected ? 1.5 : 1))
         .shadow(color: isSelected ? Theme.reticle.opacity(0.3) : .clear, radius: 10)
@@ -201,8 +219,8 @@ struct SheetSectionHeader: View {
 
     var body: some View {
         Text(title.uppercased())
-            .font(.system(size: 12, weight: .heavy, design: .rounded))
             .tracking(1.6)
+            .scaledFont(12, weight: .heavy, design: .rounded, relativeTo: .caption)
             .foregroundStyle(.white.opacity(0.72))
     }
 }

@@ -10,9 +10,16 @@ struct TargetBoard: View {
     let onTap: @MainActor (Coordinate) -> Void
 
     var body: some View {
-        BoardView(rules: perspective.rules, highlighted: aimed, accent: isInteractive ? Theme.reticle : nil) { geometry in
-            if let aimed {
-                AimGuides(geometry: geometry, target: aimed)
+        // The aim shows only while the player can fire, so it doesn't linger once the game ends.
+        let aim = isInteractive ? aimed : nil
+        BoardView(
+            rules: perspective.rules,
+            highlighted: aim,
+            accent: isInteractive ? Theme.reticle : nil,
+            isDimmed: !isInteractive && !perspective.isFinished
+        ) { geometry in
+            if let aim {
+                AimGuides(geometry: geometry, target: aim)
                     .transition(.opacity)
             }
 
@@ -25,16 +32,25 @@ struct TargetBoard: View {
                     .accessibilityHidden(true)
             }
 
-            ForEach(perspective.myShots, id: \.target) { move in
+            let shots = perspective.myShots
+            ForEach(shots.filter { !$0.result.isHit }, id: \.target) { move in
                 if let mark = perspective.targetMark(at: move.target) {
-                    CellMarkView(mark: mark, cell: geometry.cell, showsHitGlow: mark == .hit)
+                    CellMarkView(mark: mark, cell: geometry.cell)
                         .position(geometry.center(of: move.target))
                 }
             }
+            FlameClock(isBurning: shots.contains { $0.result.isHit }) { time in
+                ForEach(shots.filter { $0.result.isHit }, id: \.target) { move in
+                    if let mark = perspective.targetMark(at: move.target) {
+                        CellMarkView(mark: mark, cell: geometry.cell, showsHitGlow: mark == .hit, time: time)
+                            .position(geometry.center(of: move.target))
+                    }
+                }
+            }
 
-            if let aimed {
-                ReticleView(cell: geometry.cell, target: aimed)
-                    .position(geometry.center(of: aimed))
+            if let aim {
+                ReticleView(cell: geometry.cell, target: aim)
+                    .position(geometry.center(of: aim))
                     .transition(.scale(scale: 1.6).combined(with: .opacity))
             }
 
@@ -45,9 +61,9 @@ struct TargetBoard: View {
 
             CellTargets(geometry: geometry, rules: perspective.rules) { coordinate in
                 CellTargets.Description(
-                    value: targetDescription(at: coordinate),
+                    value: targetDescription(at: coordinate, aim: aim),
                     hint: isInteractive && perspective.canTarget(coordinate)
-                        ? (aimed == coordinate ? "Double-tap to fire." : "Double-tap to aim here.")
+                        ? (aim == coordinate ? "Double-tap to fire." : "Double-tap to aim here.")
                         : nil
                 )
             } onTap: { coordinate in
@@ -56,13 +72,12 @@ struct TargetBoard: View {
                 }
             }
         }
-        .saturation(isInteractive || perspective.isFinished ? 1 : 0.75)
-        .animation(.spring(duration: 0.3, bounce: 0.2), value: aimed)
+        .animation(.spring(duration: 0.3, bounce: 0.2), value: aim)
         .animation(.easeOut(duration: 0.5), value: perspective.knownEnemyShips)
         .animation(.easeInOut(duration: 0.4), value: isInteractive)
     }
 
-    private func targetDescription(at coordinate: Coordinate) -> String {
+    private func targetDescription(at coordinate: Coordinate, aim: Coordinate?) -> String {
         switch perspective.targetMark(at: coordinate) {
         case .miss: return "Miss"
         case .hit: return "Hit"
@@ -73,7 +88,7 @@ struct TargetBoard: View {
             if let ship = perspective.knownEnemyShip(at: coordinate) {
                 return "Enemy \(ship.kind.displayName), not hit"
             }
-            return aimed == coordinate ? "Aimed, not fired at yet" : "Not fired at yet"
+            return aim == coordinate ? "Aimed, not fired at yet" : "Not fired at yet"
         }
     }
 }
@@ -97,10 +112,20 @@ struct HomeBoard: View {
                     .accessibilityHidden(true)
             }
 
-            ForEach(perspective.enemyShots, id: \.target) { move in
+            let shots = perspective.enemyShots
+            ForEach(shots.filter { !$0.result.isHit }, id: \.target) { move in
                 if let mark = perspective.homeMark(at: move.target) {
                     CellMarkView(mark: mark, cell: geometry.cell, isMiniature: isMiniature)
                         .position(geometry.center(of: move.target))
+                }
+            }
+            // The miniature draws hits as dots, which don't flicker.
+            FlameClock(isBurning: !isMiniature && shots.contains { $0.result.isHit }) { time in
+                ForEach(shots.filter { $0.result.isHit }, id: \.target) { move in
+                    if let mark = perspective.homeMark(at: move.target) {
+                        CellMarkView(mark: mark, cell: geometry.cell, isMiniature: isMiniature, time: time)
+                            .position(geometry.center(of: move.target))
+                    }
                 }
             }
 
@@ -173,25 +198,34 @@ struct CellTargets: View {
 struct PlacementBoard: View {
     let model: FleetPlacementModel
     let feedback: any FeedbackPlayer
+    /// Set while a ship is being dragged, so the screen around the board can stop scrolling.
+    @Binding var isDragging: Bool
 
     private struct Drag: Equatable {
         let index: Int
         var translation: CGSize
+        /// Where the ship would land if dropped now.
         var candidate: ShipPlacement
-        var fits: Bool
     }
 
-    @State private var drag: Drag?
+    /// Resets by itself when the system cancels a drag (Control Center, a call), which `onEnded`
+    /// never hears about. The reset springs the ship back into place.
+    @GestureState(resetTransaction: Transaction(animation: .spring(duration: 0.3, bounce: 0.25)))
+    private var drag: Drag? = nil
+
+    /// Drags are measured in the board's space, which stays put while the dragged ship moves.
+    private static var boardSpace: NamedCoordinateSpace { .named("PlacementBoard") }
 
     var body: some View {
         BoardView(rules: model.rules, accent: Theme.reticle) { geometry in
             if let drag {
+                let fits = model.canPlace(drag.candidate, replacing: drag.index)
                 let rect = geometry.rect(for: drag.candidate).insetBy(dx: 2, dy: 2)
                 RoundedRectangle(cornerRadius: geometry.cell * 0.3, style: .continuous)
-                    .fill((drag.fits ? Theme.victory : Theme.hit).opacity(0.28))
+                    .fill((fits ? Theme.victory : Theme.hit).opacity(0.28))
                     .overlay(
                         RoundedRectangle(cornerRadius: geometry.cell * 0.3, style: .continuous)
-                            .strokeBorder(drag.fits ? Theme.victory : Theme.hit, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
+                            .strokeBorder(fits ? Theme.victory : Theme.hit, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
                     )
                     .frame(width: rect.width, height: rect.height)
                     .position(x: rect.midX, y: rect.midY)
@@ -202,28 +236,40 @@ struct PlacementBoard: View {
                 ship(at: index, geometry: geometry)
             }
         }
+        .coordinateSpace(Self.boardSpace)
+        .onChange(of: drag) { old, new in
+            isDragging = new != nil
+            guard let new else { return }
+            if old == nil {
+                model.selectedIndex = new.index
+                feedback.play(.select)
+            } else if old?.candidate != new.candidate {
+                feedback.play(.select)
+            }
+        }
     }
 
     @ViewBuilder
     private func ship(at index: Int, geometry: BoardGeometry) -> some View {
         let ship = model.ships[index]
         let rect = geometry.rect(for: ship).insetBy(dx: geometry.cell * 0.08, dy: geometry.cell * 0.08)
-        let isDragging = drag?.index == index
+        let translation = drag?.index == index ? drag?.translation : nil
 
-        ShipView(ship: ship, isHighlighted: isDragging || model.selectedIndex == index)
+        ShipView(ship: ship, isHighlighted: translation != nil || model.selectedIndex == index)
             .frame(width: rect.width, height: rect.height)
-            .scaleEffect(isDragging ? 1.06 : 1)
+            .scaleEffect(translation != nil ? 1.06 : 1)
             .contentShape(Rectangle())
-            .onTapGesture { rotate(index) }
-            .gesture(dragGesture(for: index, geometry: geometry))
-            .offset(isDragging ? drag?.translation ?? .zero : .zero)
+            .onTapGesture { tap(index) }
+            // Wins over the scroll view around the board, so dragging a ship up or down moves the ship.
+            .highPriorityGesture(dragGesture(for: index, geometry: geometry))
+            .offset(translation ?? .zero)
             .position(x: rect.midX, y: rect.midY)
-            .zIndex(isDragging ? 1 : 0)
+            .zIndex(translation != nil ? 1 : 0)
             .accessibilityElement()
-            .accessibilityLabel("\(ship.kind.displayName), \(ship.length) squares")
+            .accessibilityLabel("\(ship.kind.displayName), \(Phrase.count(ship.length, "square"))")
             .accessibilityValue("\(ship.orientation == .horizontal ? "Horizontal" : "Vertical"), from \(ship.origin.notation) to \(ship.end.notation)")
-            .accessibilityHint("Double-tap to turn. Swipe up or down for more actions.")
-            .accessibilityAction { rotate(index) }
+            .accessibilityHint(ship.length > 1 ? "Double-tap to turn. Swipe up or down for more actions." : "Swipe up or down for actions that move it.")
+            .accessibilityAction { tap(index) }
             .accessibilityAction(named: "Move up") { nudge(index, rows: -1) }
             .accessibilityAction(named: "Move down") { nudge(index, rows: 1) }
             .accessibilityAction(named: "Move left") { nudge(index, columns: -1) }
@@ -231,33 +277,40 @@ struct PlacementBoard: View {
     }
 
     private func dragGesture(for index: Int, geometry: BoardGeometry) -> some Gesture {
-        DragGesture(minimumDistance: 4)
-            .onChanged { value in
-                let ship = model.ships[index]
-                let columns = Int((value.translation.width / geometry.cell).rounded())
-                let rows = Int((value.translation.height / geometry.cell).rounded())
-                let candidate = ship.moved(to: ship.origin.offsetBy(rows: rows, columns: columns))
-                if drag == nil {
-                    model.selectedIndex = index
-                    feedback.play(.select)
-                } else if drag?.candidate != candidate {
-                    feedback.play(.select)
-                }
-                drag = Drag(index: index, translation: value.translation, candidate: candidate, fits: model.canPlace(candidate, replacing: index))
+        DragGesture(minimumDistance: 4, coordinateSpace: Self.boardSpace)
+            .updating($drag) { value, state, _ in
+                guard let landing = candidate(for: index, translation: value.translation, cell: geometry.cell) else { return }
+                state = Drag(index: index, translation: value.translation, candidate: landing)
             }
-            .onEnded { _ in
-                guard let finished = drag else { return }
-                withAnimation(.spring(duration: 0.3, bounce: 0.25)) {
-                    if finished.fits {
-                        model.move(index, to: finished.candidate.origin)
+            .onEnded { value in
+                guard let landing = candidate(for: index, translation: value.translation, cell: geometry.cell) else { return }
+                let fits = model.canPlace(landing, replacing: index)
+                if fits {
+                    withAnimation(.spring(duration: 0.3, bounce: 0.25)) {
+                        model.move(index, to: landing.origin)
                     }
-                    drag = nil
                 }
-                feedback.play(finished.fits ? .place : .invalid)
+                feedback.play(fits ? .place : .invalid)
             }
     }
 
-    private func rotate(_ index: Int) {
+    /// The ship moved by `translation`, snapped to whole cells.
+    private func candidate(for index: Int, translation: CGSize, cell: CGFloat) -> ShipPlacement? {
+        guard model.ships.indices.contains(index), cell > 0 else { return nil }
+        let ship = model.ships[index]
+        let columns = Int((translation.width / cell).rounded())
+        let rows = Int((translation.height / cell).rounded())
+        return ship.moved(to: ship.origin.offsetBy(rows: rows, columns: columns))
+    }
+
+    private func tap(_ index: Int) {
+        guard model.ships.indices.contains(index) else { return }
+        // A one-square boat looks the same either way round, so a tap just picks it out.
+        guard model.ships[index].length > 1 else {
+            model.selectedIndex = index
+            feedback.play(.select)
+            return
+        }
         withAnimation(.spring(duration: 0.3, bounce: 0.3)) {
             model.selectedIndex = index
             feedback.play(model.rotate(index) ? .place : .invalid)

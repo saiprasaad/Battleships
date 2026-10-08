@@ -23,10 +23,11 @@ struct WelcomeView: View {
                         .scaleEffect(hasAppeared ? 1 : 0.6)
                         .opacity(hasAppeared ? 1 : 0)
                         .padding(.top, 28)
+                        .accessibilityHidden(true)
 
                         VStack(spacing: 10) {
                             Text("BATTLESHIPS")
-                                .font(.display(38, weight: .black))
+                                .displayFont(38, weight: .black)
                                 .foregroundStyle(.white)
                                 .glow(Theme.reticle, radius: 14)
                                 .minimumScaleFactor(0.6)

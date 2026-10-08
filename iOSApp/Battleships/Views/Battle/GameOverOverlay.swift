@@ -13,20 +13,26 @@ struct GameOverOverlay: View {
     let onClose: @MainActor () -> Void
 
     @State private var hasAppeared = false
+    @AccessibilityFocusState private var isTitleFocused: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.62)
                 .ignoresSafeArea()
+                // An overlay, so the sunburst's size doesn't stretch the screen it covers.
+                .overlay {
+                    if didWin {
+                        Sunburst()
+                            .frame(width: 720, height: 720)
+                            .offset(y: -170)
+                            .opacity(hasAppeared ? 1 : 0)
+                    }
+                }
                 .onTapGesture { onClose() }
                 .accessibilityHidden(true)
 
-            if didWin {
-                Sunburst()
-                    .frame(width: 720, height: 720)
-                    .offset(y: -170)
-                    .opacity(hasAppeared ? 1 : 0)
-            } else {
+            if !didWin {
                 RadialGradient(colors: [Theme.hit.opacity(0), Theme.hit.opacity(0.3)], center: .center, startRadius: 160, endRadius: 560)
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
@@ -37,14 +43,23 @@ struct GameOverOverlay: View {
                 ConfettiView()
             }
 
-            card
-                .scaleEffect(hasAppeared ? 1 : 0.88)
-                .opacity(hasAppeared ? 1 : 0)
+            CenteredScrollView {
+                card
+                    .scaleEffect(hasAppeared ? 1 : 0.88)
+                    .opacity(hasAppeared ? 1 : 0)
+            } onTapOutside: {
+                onClose()
+            }
         }
         .onAppear {
             withAnimation(.spring(duration: 0.6, bounce: 0.3)) {
                 hasAppeared = true
             }
+        }
+        .task {
+            // The card is modal, so VoiceOver starts on its title once it has faded in.
+            try? await Task.sleep(for: .milliseconds(600))
+            isTitleFocused = true
         }
     }
 
@@ -52,21 +67,28 @@ struct GameOverOverlay: View {
         VStack(spacing: 16) {
             emblem
             Text(didWin ? "VICTORY" : "DEFEAT")
-                .font(.display(44, weight: .black))
+                .displayFont(44, weight: .black)
                 .foregroundStyle(didWin ? AnyShapeStyle(Theme.goldLeaf) : AnyShapeStyle(Self.defeatLettering))
                 .glow(didWin ? Theme.gold : Theme.hit, radius: 14)
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
+                .accessibilityFocused($isTitleFocused)
             Text(subtitle)
                 .font(.callout)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
-            HStack(spacing: 0) {
+            let isStacked = dynamicTypeSize.isAccessibilitySize
+            let statsLayout = isStacked ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 0))
+            statsLayout {
                 CountingStat(title: "Shots", value: stats.shotsFired)
-                Divider().frame(height: 34)
+                if !isStacked {
+                    Divider().frame(height: 34)
+                }
                 CountingStat(title: "Hits", value: stats.hits)
-                Divider().frame(height: 34)
+                if !isStacked {
+                    Divider().frame(height: 34)
+                }
                 if let accuracy = stats.accuracy {
                     CountingStat(title: "Accuracy", value: Int((accuracy * 100).rounded()), suffix: "%")
                 } else {
@@ -97,6 +119,7 @@ struct GameOverOverlay: View {
         .environment(\.colorScheme, .dark)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
+        .accessibilityAction(.escape) { onClose() }
     }
 
     @ViewBuilder
@@ -184,10 +207,11 @@ struct Sunburst: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
+        let isStill = Motion.holdsStill(reduceMotion: reduceMotion)
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: isStill)) { timeline in
             ZStack {
                 AngularGradient(stops: Self.stops(color: color, rays: rays), center: .center, angle: .zero)
-                    .rotationEffect(.degrees(reduceMotion ? 0 : Motion.cycle(timeline.date, period: 60) * 360))
+                    .rotationEffect(.degrees(isStill ? 0 : Motion.cycle(timeline.date, period: 60) * 360))
                 RadialGradient(colors: [color.opacity(0.45), color.opacity(0)], center: .center, startRadius: 0, endRadius: 190)
             }
             .mask {
@@ -214,19 +238,28 @@ struct Sunburst: View {
     }
 }
 
-/// A warship going down by the stern, with bubbles rising where it was.
+/// A warship going down by the stern, with bubbles rising where it was. Once it has gone down the
+/// scene holds still, as it does from the start in Low Power Mode.
 struct SinkingShip: View {
+    /// Seconds until the ship is under and the first bubbles have risen.
+    private static let settleTime: TimeInterval = 4.5
     @State private var start = Date()
+    @State private var hasSettled = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 60, paused: reduceMotion)) { timeline in
-            let time = reduceMotion ? 1.6 : timeline.date.timeIntervalSince(start)
+        let isStill = hasSettled || Motion.holdsStill(reduceMotion: reduceMotion)
+        TimelineView(.animation(minimumInterval: 1 / 60, paused: isStill)) { timeline in
+            let time = reduceMotion ? 1.6 : (isStill ? Self.settleTime : timeline.date.timeIntervalSince(start))
             Canvas { context, size in
                 SinkingShip.draw(time: time, in: context, size: size)
             }
         }
         .accessibilityHidden(true)
+        .task {
+            try? await Task.sleep(for: .seconds(Self.settleTime))
+            hasSettled = true
+        }
     }
 
     private static func draw(time: TimeInterval, in context: GraphicsContext, size: CGSize) {
@@ -291,7 +324,7 @@ struct SinkingShip: View {
     }
 }
 
-/// Falling paper, for victories.
+/// Falling paper, for victories. It stops drawing once the last piece has fallen.
 struct ConfettiView: View {
     private struct Piece {
         let x: CGFloat
@@ -303,8 +336,11 @@ struct ConfettiView: View {
         let color: Color
     }
 
+    /// Long enough for the slowest, latest piece to fall out of sight.
+    private static let duration: TimeInterval = 8
     @State private var start = Date()
     @State private var pieces = ConfettiView.makePieces()
+    @State private var isFinished = false
 
     private nonisolated static func makePieces() -> [Piece] {
         (0..<110).map { _ in
@@ -321,25 +357,33 @@ struct ConfettiView: View {
     }
 
     var body: some View {
-        TimelineView(.animation) { timeline in
-            Canvas { context, size in
-                let elapsed = timeline.date.timeIntervalSince(start)
-                for piece in pieces {
-                    let age = elapsed - piece.delay
-                    guard age > 0 else { continue }
-                    let y = -20 + age * piece.speed * size.height
-                    guard y < size.height + 20 else { continue }
-                    let x = piece.x * size.width + sin(age * piece.sway) * 24
-                    var copy = context
-                    copy.translateBy(x: x, y: y)
-                    copy.rotate(by: .radians(age * piece.spin))
-                    let rect = CGRect(x: -piece.size / 2, y: -piece.size / 4, width: piece.size, height: piece.size / 2)
-                    copy.fill(Path(rect), with: .color(piece.color))
+        Group {
+            if !isFinished {
+                TimelineView(.animation) { timeline in
+                    Canvas { context, size in
+                        let elapsed = timeline.date.timeIntervalSince(start)
+                        for piece in pieces {
+                            let age = elapsed - piece.delay
+                            guard age > 0 else { continue }
+                            let y = -20 + age * piece.speed * size.height
+                            guard y < size.height + 20 else { continue }
+                            let x = piece.x * size.width + sin(age * piece.sway) * 24
+                            var copy = context
+                            copy.translateBy(x: x, y: y)
+                            copy.rotate(by: .radians(age * piece.spin))
+                            let rect = CGRect(x: -piece.size / 2, y: -piece.size / 4, width: piece.size, height: piece.size / 2)
+                            copy.fill(Path(rect), with: .color(piece.color))
+                        }
+                    }
                 }
             }
         }
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .task {
+            try? await Task.sleep(for: .seconds(Self.duration))
+            isFinished = true
+        }
     }
 }

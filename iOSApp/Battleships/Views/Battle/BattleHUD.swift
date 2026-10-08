@@ -1,6 +1,17 @@
 import BattleshipCore
 import SwiftUI
 
+/// How the battle HUD arranges itself.
+enum BattleHUDLayout {
+    /// iPad: one row. The player's board is on screen at full size, so there's no miniature.
+    case wide
+    /// iPhone: the miniature beside the headline and fleets.
+    case compact
+    /// Narrow screens and accessibility text sizes: a button to see the fleet, instead of the
+    /// miniature.
+    case narrow
+}
+
 /// The instrument panel at the top of a battle: whose turn it is in big lit letters, both fleets
 /// at a glance and, on iPhone, a miniature of the player's own waters.
 struct BattleHUD<MiniMap: View>: View {
@@ -8,19 +19,21 @@ struct BattleHUD<MiniMap: View>: View {
     let headline: String
     let statusLine: String
     let mood: BattleController.Mood
-    /// Wide layouts spread out in a row and leave the miniature out.
-    var isWide = false
+    var layout: BattleHUDLayout = .compact
+    /// Shows the player's board full size, from the narrow layout's button.
+    var onShowFleet: @MainActor () -> Void = {}
     @ViewBuilder let miniMap: () -> MiniMap
 
     var body: some View {
         Group {
-            if isWide {
+            switch layout {
+            case .wide:
                 HStack(alignment: .center, spacing: 24) {
                     headlineStack
                     Spacer(minLength: 16)
                     rosters
                 }
-            } else {
+            case .compact:
                 HStack(alignment: .top, spacing: 14) {
                     VStack(alignment: .leading, spacing: 12) {
                         headlineStack
@@ -32,6 +45,19 @@ struct BattleHUD<MiniMap: View>: View {
                 }
                 // Lets the rosters settle at the bottom, level with the miniature's caption.
                 .fixedSize(horizontal: false, vertical: true)
+            case .narrow:
+                VStack(alignment: .leading, spacing: 12) {
+                    headlineStack
+                    rosters
+                    Button { onShowFleet() } label: {
+                        Label("Your Fleet", systemImage: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(.white)
+                    .accessibilityHint("Shows your board full size.")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(16)
@@ -43,7 +69,7 @@ struct BattleHUD<MiniMap: View>: View {
             HStack(spacing: 9) {
                 PulsingDot(color: mood.color, isPulsing: mood == .waiting || mood == .danger)
                 Text(headline.uppercased())
-                    .font(.display(22))
+                    .displayFont(22)
                     .foregroundStyle(mood.color)
                     .glow(mood.color, radius: 10)
                     .lineLimit(1)
@@ -53,7 +79,7 @@ struct BattleHUD<MiniMap: View>: View {
             Text(statusLine)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
+                .lineLimit(layout == .narrow ? 4 : 2)
                 .minimumScaleFactor(0.85)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -116,30 +142,52 @@ struct RosterShip: Identifiable, Hashable {
     }
 }
 
-/// A row of hull silhouettes, one per ship, crossed out once sunk.
+/// A row of hull silhouettes, one per ship, crossed out once sunk. Where there's no room for the
+/// title beside them, it goes above, and the hulls shrink if they still don't fit.
 struct FleetRoster: View {
     let title: String
     let spokenTitle: String
     let ships: [RosterShip]
     let tint: Color
+    /// Lines up the hulls of the two rosters, and grows with the title.
+    @ScaledMetric(relativeTo: .caption2) private var titleWidth: CGFloat = 46
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .heavy, design: .rounded))
-                .tracking(1)
-                .foregroundStyle(.secondary)
-                .frame(width: 46, alignment: .leading)
-            HStack(spacing: 4) {
-                ForEach(ships) { ship in
-                    RosterPip(kind: ship.kind, isSunk: ship.isSunk, tint: tint)
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                label
+                    .frame(width: titleWidth, alignment: .leading)
+                pips(isCompact: false)
             }
-            .animation(.spring(duration: 0.4), value: ships)
+            VStack(alignment: .leading, spacing: 4) {
+                label
+                pips(isCompact: false)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                label
+                pips(isCompact: true)
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spokenTitle)
         .accessibilityValue("\(ships.filter { !$0.isSunk }.count) of \(ships.count) ships afloat")
+    }
+
+    private var label: some View {
+        Text(title.uppercased())
+            .tracking(1)
+            .scaledFont(10, weight: .heavy, design: .rounded, relativeTo: .caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+
+    private func pips(isCompact: Bool) -> some View {
+        HStack(spacing: isCompact ? 3 : 4) {
+            ForEach(ships) { ship in
+                RosterPip(kind: ship.kind, isSunk: ship.isSunk, tint: tint, isCompact: isCompact)
+            }
+        }
+        .animation(.spring(duration: 0.4), value: ships)
     }
 }
 
@@ -147,6 +195,7 @@ private struct RosterPip: View {
     let kind: ShipKind
     let isSunk: Bool
     let tint: Color
+    var isCompact = false
 
     var body: some View {
         HullShape(kind: kind)
@@ -159,12 +208,17 @@ private struct RosterPip: View {
                         .rotationEffect(.degrees(-10))
                 }
             }
-            .frame(width: max(11, CGFloat(kind.length) * 7), height: 8)
+            .frame(width: width, height: isCompact ? 6 : 8)
             .shadow(color: isSunk ? .clear : tint.opacity(0.5), radius: 3)
+    }
+
+    private var width: CGFloat {
+        isCompact ? max(8, CGFloat(kind.length) * 5) : max(11, CGFloat(kind.length) * 7)
     }
 }
 
-/// The player's own board in miniature. Tapping it opens the full-size view.
+/// The player's own board in miniature. Tapping it opens the full-size view. VoiceOver hears how
+/// many ships are afloat from the fleet roster beside it, so the button doesn't repeat it.
 struct MiniMapButton: View {
     let perspective: BattlePerspective
     let effects: [ImpactEffect]
@@ -182,15 +236,14 @@ struct MiniMapButton: View {
                     Text("YOUR FLEET")
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                 }
-                .font(.system(size: 9, weight: .heavy, design: .rounded))
                 .tracking(0.6)
+                .scaledFont(9, weight: .heavy, design: .rounded, relativeTo: .caption2)
                 .foregroundStyle(.secondary)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Your fleet")
-        .accessibilityValue("\(perspective.myShipsRemaining) of \(perspective.myFleet.count) ships afloat")
         .accessibilityHint("Shows your board full size.")
     }
 }

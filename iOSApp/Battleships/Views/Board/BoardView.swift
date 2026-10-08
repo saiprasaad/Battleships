@@ -10,6 +10,8 @@ struct BoardView<Content: View>: View {
     var highlighted: Coordinate?
     /// Lights the board's edge, to show it's the one to play on.
     var accent: Color?
+    /// Washes some of the colour out of the water, while the board isn't in play.
+    var isDimmed = false
     @ViewBuilder let content: (BoardGeometry) -> Content
 
     var body: some View {
@@ -17,7 +19,7 @@ struct BoardView<Content: View>: View {
             let side = min(proxy.size.width, proxy.size.height)
             let geometry = BoardGeometry(boardSize: rules.boardSize, side: side, showsLabels: showsLabels)
             ZStack(alignment: .topLeading) {
-                SeaGrid(geometry: geometry, isDetailed: showsLabels, accent: accent)
+                SeaGrid(geometry: geometry, isDetailed: showsLabels, accent: accent, isDimmed: isDimmed)
                 if showsLabels {
                     BoardLabels(geometry: geometry, highlighted: highlighted)
                 }
@@ -34,17 +36,18 @@ struct SeaGrid: View {
     let geometry: BoardGeometry
     var isDetailed = true
     var accent: Color?
+    var isDimmed = false
 
     var body: some View {
         Canvas { context, _ in
-            SeaGrid.draw(geometry: geometry, isDetailed: isDetailed, accent: accent, in: context)
+            SeaGrid.draw(geometry: geometry, isDetailed: isDetailed, accent: accent, isDimmed: isDimmed, in: context)
         }
         .shadow(color: (accent ?? .black).opacity(accent == nil ? 0.35 : 0.4), radius: accent == nil ? 10 : 16)
         .animation(.easeInOut(duration: 0.4), value: accent)
         .accessibilityHidden(true)
     }
 
-    private static func draw(geometry: BoardGeometry, isDetailed: Bool, accent: Color?, in context: GraphicsContext) {
+    private static func draw(geometry: BoardGeometry, isDetailed: Bool, accent: Color?, isDimmed: Bool, in context: GraphicsContext) {
         let rect = geometry.gridRect
         guard rect.width > 0 else { return }
         let water = Path(roundedRect: rect, cornerRadius: min(14, geometry.cell * 0.35), style: .continuous)
@@ -67,6 +70,13 @@ struct SeaGrid: View {
                 endPoint: CGPoint(x: rect.midX, y: rect.midY)
             )
         )
+        if isDimmed {
+            // Drawn into the water once, rather than filtering the whole board (and every flame on
+            // it) each frame.
+            var wash = context
+            wash.blendMode = .saturation
+            wash.fill(water, with: .color(Color(white: 0.5).opacity(0.25)))
+        }
 
         // The chart grid, with a dot where lines cross.
         var lines = Path()
@@ -165,6 +175,8 @@ struct CellMarkView: View {
     var showsHitGlow = false
     /// The fleet miniature draws plain dots, which read better at that size.
     var isMiniature = false
+    /// The board's ``FlameClock`` time, which makes fires flicker.
+    var time: Double?
 
     var body: some View {
         symbol(for: mark)
@@ -184,9 +196,9 @@ struct CellMarkView: View {
             case .miss:
                 SplashMark(cell: cell)
             case .hit:
-                FlameMark(cell: cell, showsHalo: showsHitGlow)
+                FlameMark(cell: cell, showsHalo: showsHitGlow, time: time)
             case .sunk:
-                FlameMark(cell: cell, scale: 0.7, showsHalo: false)
+                FlameMark(cell: cell, scale: 0.7, showsHalo: false, time: time)
                     .opacity(0.8)
             }
         }
@@ -218,42 +230,60 @@ private struct SplashMark: View {
     }
 }
 
-/// A fire burning where a shell struck a ship. It flickers, unless Reduce Motion is on.
+/// One clock for all the fires on a board, so a board full of hits redraws once a frame rather than
+/// once per flame. It stops when nothing is burning, under Reduce Motion and in Low Power Mode, and
+/// passes `nil` then.
+struct FlameClock<Content: View>: View {
+    let isBurning: Bool
+    @ViewBuilder let content: (Double?) -> Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let isStill = !isBurning || Motion.holdsStill(reduceMotion: reduceMotion)
+        TimelineView(.animation(minimumInterval: 1 / 24, paused: isStill)) { timeline in
+            // Shares the board's coordinates: marks inside are placed with `position`.
+            ZStack(alignment: .topLeading) {
+                content(isStill ? nil : Motion.seconds(timeline.date))
+            }
+        }
+    }
+}
+
+/// A fire burning where a shell struck a ship. It flickers with `time` from the board's
+/// ``FlameClock``, and holds still without it.
 struct FlameMark: View {
     let cell: CGFloat
     var scale: CGFloat = 1
     var showsHalo = true
+    var time: Double?
     /// Each fire flickers at its own pace.
     @State private var rhythm = FlameMark.makeRhythm()
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     nonisolated private static func makeRhythm() -> (phase: Double, speed: Double) {
         (.random(in: 0...(2 * .pi)), .random(in: 2.4...3.6))
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 24, paused: reduceMotion)) { timeline in
-            let flicker = reduceMotion ? 0.5 : 0.5 + 0.5 * sin(Motion.seconds(timeline.date) * rhythm.speed * 2 * .pi + rhythm.phase)
-            ZStack {
-                if showsHalo {
-                    Circle()
-                        .fill(
-                            RadialGradient(
-                                colors: [Theme.flame.opacity(0.6), Theme.hit.opacity(0.25), Theme.hit.opacity(0)],
-                                center: .center,
-                                startRadius: 0,
-                                endRadius: cell * 0.5
-                            )
+        let flicker: Double = time.map { 0.5 + 0.5 * sin($0 * rhythm.speed * 2 * .pi + rhythm.phase) } ?? 0.5
+        ZStack {
+            if showsHalo {
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [Theme.flame.opacity(0.6), Theme.hit.opacity(0.25), Theme.hit.opacity(0)],
+                            center: .center,
+                            startRadius: 0,
+                            endRadius: cell * 0.5
                         )
-                        .frame(width: cell, height: cell)
-                        .scaleEffect(0.92 + 0.16 * flicker)
-                }
-                Image(systemName: "flame.fill")
-                    .font(.system(size: cell * 0.52 * scale))
-                    .foregroundStyle(LinearGradient(colors: [Theme.ember, Theme.flame, Theme.hit], startPoint: .top, endPoint: .bottom))
-                    .scaleEffect(x: 1.04 - 0.1 * flicker, y: 0.94 + 0.14 * flicker, anchor: .bottom)
-                    .shadow(color: Theme.flame.opacity(0.9), radius: cell * 0.12 * scale)
+                    )
+                    .frame(width: cell, height: cell)
+                    .scaleEffect(0.92 + 0.16 * flicker)
             }
+            Image(systemName: "flame.fill")
+                .font(.system(size: cell * 0.52 * scale))
+                .foregroundStyle(LinearGradient(colors: [Theme.ember, Theme.flame, Theme.hit], startPoint: .top, endPoint: .bottom))
+                .scaleEffect(x: 1.04 - 0.1 * flicker, y: 0.94 + 0.14 * flicker, anchor: .bottom)
+                .shadow(color: Theme.flame.opacity(0.9), radius: cell * 0.12 * scale)
         }
         .allowsHitTesting(false)
     }
@@ -267,12 +297,13 @@ struct ReticleView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let isStill = Motion.holdsStill(reduceMotion: reduceMotion)
         ZStack {
-            TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: isStill)) { timeline in
                 Circle()
                     .strokeBorder(Theme.reticle.opacity(0.9), style: StrokeStyle(lineWidth: max(1, cell * 0.045), dash: [cell * 0.1, cell * 0.07]))
                     .frame(width: cell * 0.72, height: cell * 0.72)
-                    .rotationEffect(.degrees(reduceMotion ? 0 : Motion.cycle(timeline.date, period: 5) * 360))
+                    .rotationEffect(.degrees(isStill ? 0 : Motion.cycle(timeline.date, period: 5) * 360))
             }
             LockOnBrackets(cell: cell)
                 .id(target)

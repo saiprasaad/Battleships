@@ -94,7 +94,14 @@ struct ProfileView: View {
 
                 if app.isSignedIn {
                     Section {
+                        NavigationLink {
+                            BlockedPlayersView()
+                        } label: {
+                            Label("Blocked Players", systemImage: "hand.raised")
+                        }
                         Button("Sign Out") { confirmsSignOut = true }
+                    } header: {
+                        SheetSectionHeader(title: "Account")
                     }
                     .listRowBackground(Theme.rowBackground)
                     Section {
@@ -110,6 +117,7 @@ struct ProfileView: View {
                         .disabled(isDeleting)
                     } footer: {
                         Text("Deleting your account removes your profile and rating. Battles in progress are resigned.")
+                            .foregroundStyle(Theme.secondaryText)
                     }
                     .listRowBackground(Theme.rowBackground)
                 }
@@ -120,7 +128,18 @@ struct ProfileView: View {
                     } label: {
                         Label("How to Play", systemImage: "questionmark.circle")
                     }
+                    Link(destination: app.privacyPolicyURL) {
+                        Label("Privacy Policy", systemImage: "lock.shield")
+                    }
+                    Link(destination: app.termsURL) {
+                        Label("Terms of Use", systemImage: "doc.text")
+                    }
+                    Link(destination: app.supportURL) {
+                        Label("Support", systemImage: "lifepreserver")
+                    }
                     LabeledContent("Version", value: Self.version)
+                } header: {
+                    SheetSectionHeader(title: "About")
                 }
                 .listRowBackground(Theme.rowBackground)
             }
@@ -227,7 +246,7 @@ private struct ProfileHeader: View {
             .frame(height: 112)
             VStack(spacing: 4) {
                 Text(account.username)
-                    .font(.display(24, weight: .black))
+                    .displayFont(24, weight: .black)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                 Text("Captain since \(account.createdAt.formatted(.dateTime.month(.wide).year()))")
@@ -269,7 +288,15 @@ struct ServerSettingsView: View {
             } header: {
                 SheetSectionHeader(title: "Server address")
             } footer: {
-                Text("Accounts belong to a server, so switching signs you out. Games against the computer are kept.")
+                VStack(alignment: .leading, spacing: 8) {
+                    // Save stays off for an address like this, so say why.
+                    if let problem = AppSettings.serverAddressProblem(address) {
+                        Label(problem, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Theme.amber)
+                    }
+                    Text("Accounts belong to a server, so switching signs you out. Games against the computer are kept.")
+                        .foregroundStyle(Theme.secondaryText)
+                }
             }
             .listRowBackground(Theme.rowBackground)
 

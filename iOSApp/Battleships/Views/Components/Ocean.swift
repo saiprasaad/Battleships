@@ -1,19 +1,23 @@
 import SwiftUI
 
-/// The living sea behind the app: a slowly drifting mesh of deep blues. It holds still when Reduce
-/// Motion is on, and falls back to a plain gradient before iOS 18.
+/// The living sea behind the app: a slowly drifting mesh of deep blues. It holds still under Reduce
+/// Motion and in Low Power Mode, and falls back to a plain gradient before iOS 18.
 struct OceanBackdrop: View {
     var extendsIntoSafeArea = true
+    /// Off for a small patch of sea laid over the big one, where a second drift would double the work.
+    var isAnimated = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let isStill = !isAnimated || Motion.holdsStill(reduceMotion: reduceMotion)
         Group {
             if #available(iOS 18.0, *) {
-                TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
+                // The drift is slow and soft-edged, so 20 frames a second looks the same as 30.
+                TimelineView(.animation(minimumInterval: 1 / 20, paused: isStill)) { timeline in
                     MeshGradient(
                         width: 3,
                         height: 3,
-                        points: Self.points(at: reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate),
+                        points: Self.points(at: isStill ? 0 : timeline.date.timeIntervalSinceReferenceDate),
                         colors: Self.colors
                     )
                 }
@@ -49,7 +53,7 @@ struct WavesView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: Motion.holdsStill(reduceMotion: reduceMotion))) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
             Canvas { context, size in
                 WavesView.draw(time: time, amplitude: amplitude, in: context, size: size)
@@ -105,33 +109,44 @@ struct SonarSweep: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { timeline in
-            let turns = reduceMotion ? 0.15 : Motion.cycle(timeline.date, period: period)
-            GeometryReader { proxy in
-                let side = max(proxy.size.width, proxy.size.height) * 1.5
-                ZStack {
-                    AngularGradient(
-                        stops: [
-                            .init(color: tint.opacity(0), location: 0),
-                            .init(color: tint.opacity(0), location: 0.72),
-                            .init(color: tint.opacity(0.32), location: 0.999),
-                            .init(color: tint.opacity(0), location: 1),
-                        ],
-                        center: .center,
-                        angle: .zero
-                    )
-                    Rectangle()
-                        .fill(LinearGradient(colors: [tint.opacity(0.9), tint.opacity(0)], startPoint: .leading, endPoint: .trailing))
-                        .frame(width: side / 2, height: 1.5)
-                        .offset(x: side / 4)
-                }
-                .frame(width: side, height: side)
-                .rotationEffect(.degrees(turns * 360))
-                .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
-            }
+        let isStill = Motion.holdsStill(reduceMotion: reduceMotion)
+        // It can run for the whole of an opponent's turn, so it's held to 30 frames a second.
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: isStill)) { timeline in
+            SonarBeam(tint: tint, turns: isStill ? 0.15 : Motion.cycle(timeline.date, period: period))
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// The beam of a sonar sweep, `turns` of the way round.
+private struct SonarBeam: View {
+    let tint: Color
+    let turns: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            let side = max(proxy.size.width, proxy.size.height) * 1.5
+            ZStack {
+                AngularGradient(
+                    stops: [
+                        .init(color: tint.opacity(0), location: 0),
+                        .init(color: tint.opacity(0), location: 0.72),
+                        .init(color: tint.opacity(0.32), location: 0.999),
+                        .init(color: tint.opacity(0), location: 1),
+                    ],
+                    center: .center,
+                    angle: .zero
+                )
+                Rectangle()
+                    .fill(LinearGradient(colors: [tint.opacity(0.9), tint.opacity(0)], startPoint: .leading, endPoint: .trailing))
+                    .frame(width: side / 2, height: 1.5)
+                    .offset(x: side / 4)
+            }
+            .frame(width: side, height: side)
+            .rotationEffect(.degrees(turns * 360))
+            .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+        }
     }
 }
 
@@ -139,8 +154,10 @@ struct SonarSweep: View {
 struct RadarScope: View {
     var tint: Color = Theme.reticle
     var contacts: [UnitPoint] = [UnitPoint(x: 0.7, y: 0.3), UnitPoint(x: 0.3, y: 0.64), UnitPoint(x: 0.6, y: 0.76)]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let isStill = Motion.holdsStill(reduceMotion: reduceMotion)
         GeometryReader { proxy in
             let side = min(proxy.size.width, proxy.size.height)
             ZStack {
@@ -157,11 +174,21 @@ struct RadarScope: View {
                 Rectangle()
                     .fill(tint.opacity(0.18))
                     .frame(width: side, height: 1)
-                SonarSweep(tint: tint, period: 3.6)
-                    .clipShape(Circle())
-                ForEach(Array(contacts.enumerated()), id: \.offset) { index, contact in
-                    RadarContact(tint: tint, delay: Double(index) * 0.9)
-                        .position(x: side * contact.x, y: side * contact.y)
+                // One clock for the beam and every contact.
+                TimelineView(.animation(minimumInterval: 1 / 30, paused: isStill)) { timeline in
+                    let now = Motion.seconds(timeline.date)
+                    ZStack {
+                        SonarBeam(tint: tint, turns: isStill ? 0.15 : Motion.cycle(now, period: 3.6))
+                            .clipShape(Circle())
+                        ForEach(Array(contacts.enumerated()), id: \.offset) { index, contact in
+                            RadarContact(
+                                tint: tint,
+                                glow: isStill ? 1 : 0.5 + 0.5 * sin(2 * .pi * (now - Double(index) * 0.9) / 2.6)
+                            )
+                            .position(x: side * contact.x, y: side * contact.y)
+                        }
+                    }
+                    .frame(width: side, height: side)
                 }
                 Circle()
                     .strokeBorder(tint.opacity(0.5), lineWidth: 1.5)
@@ -176,18 +203,15 @@ struct RadarScope: View {
 
 private struct RadarContact: View {
     let tint: Color
-    let delay: Double
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// From 0 (faded out) to 1 (lit).
+    let glow: Double
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
-            let glow = reduceMotion ? 1 : 0.5 + 0.5 * sin(2 * .pi * (Motion.seconds(timeline.date) - delay) / 2.6)
-            Circle()
-                .fill(tint)
-                .frame(width: 6, height: 6)
-                .glow(tint, radius: 6)
-                .opacity(0.12 + 0.88 * glow)
-        }
+        Circle()
+            .fill(tint)
+            .frame(width: 6, height: 6)
+            .glow(tint, radius: 6)
+            .opacity(0.12 + 0.88 * glow)
     }
 }
 
@@ -197,11 +221,12 @@ struct SonarPing: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
+        let isStill = Motion.holdsStill(reduceMotion: reduceMotion)
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: isStill)) { timeline in
             let now = Motion.seconds(timeline.date)
             ZStack {
                 ForEach(0..<3, id: \.self) { ring in
-                    let progress = reduceMotion ? 0.3 + Double(ring) * 0.25 : Motion.cycle(now + Double(ring) * 0.8, period: 2.4)
+                    let progress = isStill ? 0.3 + Double(ring) * 0.25 : Motion.cycle(now + Double(ring) * 0.8, period: 2.4)
                     Circle()
                         .stroke(tint.opacity(0.5), lineWidth: 1)
                         .scaleEffect(0.2 + 0.8 * Motion.easeOut(progress))
@@ -238,7 +263,7 @@ private struct PulseRing: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if !reduceMotion {
+        if !Motion.holdsStill(reduceMotion: reduceMotion) {
             TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
                 let progress = Motion.cycle(timeline.date, period: 1.2)
                 Circle()
@@ -253,6 +278,13 @@ private struct PulseRing: View {
 /// Clock arithmetic for looping effects. They're drawn from the time on a `TimelineView` rather
 /// than animated from `onAppear`, which would also animate the view's first layout.
 enum Motion {
+    /// Whether looping decoration should hold still: under Reduce Motion, as asked, and in Low Power
+    /// Mode, to save battery.
+    @MainActor
+    static func holdsStill(reduceMotion: Bool) -> Bool {
+        reduceMotion || MotionPreferences.shared.isLowPowerModeEnabled
+    }
+
     static func seconds(_ date: Date) -> Double {
         date.timeIntervalSinceReferenceDate
     }
@@ -274,7 +306,8 @@ enum Motion {
 }
 
 extension Font {
-    /// Wide, heavy lettering for headlines like VICTORY or YOUR TURN.
+    /// Wide, heavy lettering for headlines like VICTORY or YOUR TURN, at a fixed size. Prefer the
+    /// `displayFont(_:weight:monospacedDigits:)` view modifier, which follows Dynamic Type.
     static func display(_ size: CGFloat, weight: Font.Weight = .heavy) -> Font {
         .system(size: size, weight: weight).width(.expanded)
     }

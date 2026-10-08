@@ -26,6 +26,7 @@ struct LobbyView: View {
     @State private var showsSignIn = false
     @State private var pendingRemoval: PendingRemoval?
     @State private var errorMessage: String?
+    @State private var moderation: ModerationRequest?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -60,6 +61,7 @@ struct LobbyView: View {
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 swipeActions(for: entry)
                             }
+                            .playerContextMenu(opponent(in: entry), gameID: entry.id, request: $moderation)
                         }
                     } header: {
                         LobbySectionHeader(section: group.section, count: group.entries.count)
@@ -69,12 +71,20 @@ struct LobbyView: View {
 
                 if groups.isEmpty {
                     Section {
-                        ContentUnavailableView {
-                            Label("No Battles Yet", systemImage: "water.waves")
-                        } description: {
-                            Text("Start one against the computer, or challenge a friend online.")
+                        if isLoadingOnlineGames {
+                            ProgressView("Loading battles…")
+                                .tint(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 40)
+                                .listRowBackground(Color.clear)
+                        } else {
+                            ContentUnavailableView {
+                                Label("No Battles Yet", systemImage: "water.waves")
+                            } description: {
+                                Text("Start one against the computer, or challenge a friend online.")
+                            }
+                            .listRowBackground(Color.clear)
                         }
-                        .listRowBackground(Color.clear)
                     }
                 }
             }
@@ -130,6 +140,7 @@ struct LobbyView: View {
             } message: {
                 Text(errorMessage ?? "")
             }
+            .playerModeration($moderation)
             .onChange(of: app.pendingRoute, initial: true) {
                 guard let route = app.pendingRoute else { return }
                 app.pendingRoute = nil
@@ -147,6 +158,17 @@ struct LobbyView: View {
 
     private var groups: [LobbyGroup] {
         Lobby.groups(online: app.isSignedIn ? app.online.summaries : [], solo: app.solo.matches)
+    }
+
+    /// Until the first list of online games arrives, an empty lobby isn't known to be empty.
+    private var isLoadingOnlineGames: Bool {
+        app.isSignedIn && !app.online.hasLoaded && app.online.refreshError == nil
+    }
+
+    /// The other player in an online game, who can be reported or blocked from its row.
+    private func opponent(in entry: LobbyEntry) -> PlayerSummary? {
+        guard case let .online(game) = entry else { return nil }
+        return game.opponent
     }
 
     // MARK: Swipe actions
@@ -218,8 +240,8 @@ private struct LobbyHero: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text("COMMAND YOUR FLEET")
-                    .font(.system(size: 11, weight: .heavy, design: .rounded))
                     .tracking(2)
+                    .scaledFont(11, weight: .heavy, design: .rounded, relativeTo: .caption2)
                     .foregroundStyle(Theme.reticle)
                 if let rating {
                     Label("\(rating)", systemImage: "star.fill")
@@ -232,7 +254,7 @@ private struct LobbyHero: View {
                 }
             }
             Text("Ready for\nbattle, Captain?")
-                .font(.display(27, weight: .black))
+                .displayFont(27, weight: .black)
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
             Text(isSignedIn
@@ -253,7 +275,8 @@ private struct LobbyHero: View {
         .frame(maxWidth: .infinity, minHeight: 300, alignment: .topLeading)
         .background {
             ZStack(alignment: .topTrailing) {
-                OceanBackdrop(extendsIntoSafeArea: false)
+                // Still: the screen's own sea already drifts behind the card.
+                OceanBackdrop(extendsIntoSafeArea: false, isAnimated: false)
                 RadarScope()
                     .frame(width: 230, height: 230)
                     .offset(x: 92, y: -62)
@@ -282,8 +305,8 @@ private struct LobbySectionHeader: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(section.title.uppercased())
-                .font(.system(size: 12, weight: .heavy, design: .rounded))
                 .tracking(1.6)
+                .scaledFont(12, weight: .heavy, design: .rounded, relativeTo: .caption)
                 .foregroundStyle(color)
             if section == .challenges || section == .yourTurn {
                 Text("\(count)")

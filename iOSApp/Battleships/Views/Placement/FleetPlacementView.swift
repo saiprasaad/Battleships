@@ -11,6 +11,7 @@ struct FleetPlacementView: View {
     @Environment(AppModel.self) private var app
     @State private var model: FleetPlacementModel
     @State private var isSubmitting = false
+    @State private var isDraggingShip = false
 
     init(mode: GameMode, confirmTitle: String, onConfirm: @escaping @MainActor ([ShipPlacement]) async -> Void) {
         self.mode = mode
@@ -24,12 +25,12 @@ struct FleetPlacementView: View {
             OceanBackdrop()
             ScrollView {
                 VStack(spacing: 20) {
-                    Label("Drag a ship to move it. Tap it to turn it.", systemImage: "hand.draw")
+                    Label(instructions, systemImage: "hand.draw")
                         .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.secondaryText)
                         .multilineTextAlignment(.center)
 
-                    PlacementBoard(model: model, feedback: app.feedback)
+                    PlacementBoard(model: model, feedback: app.feedback, isDragging: $isDraggingShip)
                         .frame(maxWidth: 520)
 
                     FleetLegend(rules: mode.rules)
@@ -39,6 +40,8 @@ struct FleetPlacementView: View {
                 .frame(maxWidth: .infinity)
             }
             .scrollBounceBehavior(.basedOnSize)
+            // Holds the screen still under a ship being dragged.
+            .scrollDisabled(isDraggingShip)
         }
         .safeAreaInset(edge: .bottom) {
             controls
@@ -49,6 +52,13 @@ struct FleetPlacementView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarBackground(Theme.abyss.opacity(0.4), for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
+    }
+
+    /// One-square boats look the same either way round, so they can't be turned.
+    private var instructions: String {
+        mode.rules.fleet.contains { $0.length > 1 }
+            ? "Drag a ship to move it. Tap it to turn it."
+            : "Drag a boat to move it."
     }
 
     private var controls: some View {
@@ -107,8 +117,8 @@ struct FleetLegend: View {
         }
         VStack(alignment: .leading, spacing: 12) {
             Text("YOUR FLEET")
-                .font(.system(size: 12, weight: .heavy, design: .rounded))
                 .tracking(1.6)
+                .scaledFont(12, weight: .heavy, design: .rounded, relativeTo: .caption)
                 .foregroundStyle(.white.opacity(0.72))
                 .accessibilityAddTraits(.isHeader)
             ForEach(kinds, id: \.self) { kind in
@@ -134,7 +144,7 @@ private struct FleetLegendRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(kind.displayName)
                     .font(.body.weight(.semibold))
-                Text(kind.length == 1 ? "1 square" : "\(kind.length) squares")
+                Text(Phrase.count(kind.length, "square"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -146,6 +156,12 @@ private struct FleetLegendRow: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(count) \(kind.displayName), \(kind.length) squares")
+        .accessibilityLabel(spokenDescription)
+    }
+
+    /// "Carrier, 5 squares" or "5 Patrol Boats, 1 square each".
+    private var spokenDescription: String {
+        let size = Phrase.count(kind.length, "square")
+        return count == 1 ? "\(kind.displayName), \(size)" : "\(count) \(kind.displayName)s, \(size) each"
     }
 }

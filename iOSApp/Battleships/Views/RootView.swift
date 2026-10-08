@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct RootView: View {
     private enum Tab: Hashable {
@@ -27,10 +28,10 @@ struct RootView: View {
         .fullScreenCover(isPresented: showsWelcome) {
             WelcomeView { app.settings.hasSeenWelcome = true }
         }
-        .alert("You've Been Signed Out", isPresented: Bindable(app).showsSessionExpired) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Your session expired. Sign in again to keep playing online. Games against the computer are unaffected.")
+        .onChange(of: app.showsSessionExpired, initial: true) {
+            if app.showsSessionExpired {
+                explainSessionExpiry()
+            }
         }
         .onChange(of: app.pendingRoute) {
             if app.pendingRoute != nil {
@@ -49,6 +50,39 @@ struct RootView: View {
             get: { !app.settings.hasSeenWelcome },
             set: { if !$0 { app.settings.hasSeenWelcome = true } }
         )
+    }
+
+    /// Tells the player why they were signed out. A sheet may well be up when it happens, and an alert
+    /// attached to this view can't appear over one, so it goes on whatever is on top.
+    private func explainSessionExpiry() {
+        guard let presenter = Self.topmostViewController() else { return }
+        guard presenter.presentedViewController == nil else {
+            // Something on top is still going away; nothing can be presented until it has.
+            Task {
+                try? await Task.sleep(for: .milliseconds(400))
+                explainSessionExpiry()
+            }
+            return
+        }
+        app.showsSessionExpired = false
+        let alert = UIAlertController(
+            title: "You've Been Signed Out",
+            message: "Your session expired. Sign in again to keep playing online. Games against the computer are unaffected.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+        presenter.present(alert, animated: true)
+    }
+
+    private static func topmostViewController() -> UIViewController? {
+        let windows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+        var top = (windows.first { $0.isKeyWindow } ?? windows.first)?.rootViewController
+        while let presented = top?.presentedViewController, !presented.isBeingDismissed {
+            top = presented
+        }
+        return top
     }
 
     /// Online games waiting on the player: their move, or a challenge to answer.

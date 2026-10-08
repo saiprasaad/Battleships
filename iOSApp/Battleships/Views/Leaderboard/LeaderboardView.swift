@@ -8,6 +8,7 @@ struct LeaderboardView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showsSignIn = false
+    @State private var moderation: ModerationRequest?
 
     var body: some View {
         NavigationStack {
@@ -40,12 +41,14 @@ struct LeaderboardView: View {
                 } else {
                     List {
                         if entries.count >= 3 {
-                            Podium(entries: Array(entries.prefix(3)), yourID: app.session.account?.id)
+                            Podium(entries: Array(entries.prefix(3)), yourID: app.session.account?.id, moderation: $moderation)
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                         }
                         ForEach(entries.count >= 3 ? Array(entries.dropFirst(3)) : entries) { entry in
-                            LeaderboardRow(entry: entry, isYou: entry.player.id == app.session.account?.id)
+                            let isYou = entry.player.id == app.session.account?.id
+                            LeaderboardRow(entry: entry, isYou: isYou)
+                                .playerContextMenu(isYou ? nil : entry.player, request: $moderation)
                         }
                     }
                     .listStyle(.plain)
@@ -57,6 +60,7 @@ struct LeaderboardView: View {
             .refreshable { await load() }
             .task(id: app.session.account?.id) { await load() }
             .sheet(isPresented: $showsSignIn) { AuthSheet() }
+            .playerModeration($moderation)
         }
     }
 
@@ -127,6 +131,7 @@ private struct LeaderboardRow: View {
 private struct Podium: View {
     let entries: [LeaderboardEntry]
     let yourID: UUID?
+    @Binding var moderation: ModerationRequest?
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
@@ -167,13 +172,15 @@ private struct Podium: View {
                             .stroke(color.opacity(0.5), lineWidth: 1)
                     )
                 Text("\(entry.rank)")
-                    .font(.display(26, weight: .black))
+                    .displayFont(26, weight: .black)
                     .foregroundStyle(.white.opacity(0.9))
                     .padding(.top, 8)
             }
             .frame(height: height)
         }
         .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .playerContextMenu(isYou ? nil : entry.player, request: $moderation)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Rank \(entry.rank), \(entry.player.username)\(isYou ? ", you" : ""), rating \(entry.player.rating)")
     }

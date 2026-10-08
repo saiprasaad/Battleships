@@ -7,12 +7,14 @@ struct ImpactView: View {
     let cell: CGFloat
     @State private var start = Date()
     @State private var particles = ImpactBurst.makeParticles()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let flashes = !reduceMotion && !MotionPreferences.shared.dimsFlashingLights
         TimelineView(.animation) { timeline in
             let elapsed = timeline.date.timeIntervalSince(start)
             Canvas { context, size in
-                ImpactBurst.draw(isHit: isHit, elapsed: elapsed, particles: particles, cell: cell, in: context, size: size)
+                ImpactBurst.draw(isHit: isHit, elapsed: elapsed, particles: particles, cell: cell, flashes: flashes, in: context, size: size)
             }
         }
         .frame(width: cell * 3.4, height: cell * 3.4)
@@ -49,8 +51,17 @@ enum ImpactBurst {
         }
     }
 
+    /// `flashes` is off under Reduce Motion and Dim Flashing Lights, which leave out the white flash.
     @MainActor
-    static func draw(isHit: Bool, elapsed: TimeInterval, particles: [Particle], cell: CGFloat, in context: GraphicsContext, size: CGSize) {
+    static func draw(
+        isHit: Bool,
+        elapsed: TimeInterval,
+        particles: [Particle],
+        cell: CGFloat,
+        flashes: Bool,
+        in context: GraphicsContext,
+        size: CGSize
+    ) {
         let time = CGFloat(elapsed)
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
         if time < flightTime {
@@ -67,14 +78,14 @@ enum ImpactBurst {
         let progress = min(1, (time - flightTime) / (duration - flightTime))
         guard progress < 1 else { return }
         if isHit {
-            drawExplosion(progress, center: center, particles: particles, cell: cell, in: context)
+            drawExplosion(progress, center: center, particles: particles, cell: cell, flashes: flashes, in: context)
         } else {
-            drawSplash(progress, center: center, particles: particles, cell: cell, in: context)
+            drawSplash(progress, center: center, particles: particles, cell: cell, flashes: flashes, in: context)
         }
     }
 
     @MainActor
-    private static func drawExplosion(_ t: CGFloat, center: CGPoint, particles: [Particle], cell: CGFloat, in context: GraphicsContext) {
+    private static func drawExplosion(_ t: CGFloat, center: CGPoint, particles: [Particle], cell: CGFloat, flashes: Bool, in context: GraphicsContext) {
         let fade = 1 - t
         let burst = easeOut(t)
 
@@ -115,7 +126,7 @@ enum ImpactBurst {
         )
 
         // A white-hot core and flash, added as light.
-        if t < 0.3 {
+        if flashes, t < 0.3 {
             let flash = 1 - t / 0.3
             let radius = cell * (0.45 + 0.6 * t)
             var light = context
@@ -156,7 +167,7 @@ enum ImpactBurst {
     }
 
     @MainActor
-    private static func drawSplash(_ t: CGFloat, center: CGPoint, particles: [Particle], cell: CGFloat, in context: GraphicsContext) {
+    private static func drawSplash(_ t: CGFloat, center: CGPoint, particles: [Particle], cell: CGFloat, flashes: Bool, in context: GraphicsContext) {
         // Ripples spreading out, one after another.
         for ring in 0..<3 {
             let delay = CGFloat(ring) * 0.13
@@ -169,14 +180,15 @@ enum ImpactBurst {
             )
         }
 
-        // The column of water collapsing.
+        // The column of water collapsing, less bright without flashes.
         if t < 0.35 {
             let collapse = 1 - t / 0.35
             let radius = cell * 0.42 * collapse + 1
+            let brightness: CGFloat = flashes ? 0.95 : 0.45
             context.fill(
                 Path(ellipseIn: circle(center, radius)),
                 with: .radialGradient(
-                    Gradient(colors: [Color.white.opacity(0.95 * collapse), Theme.reticle.opacity(0.4 * collapse), Theme.reticle.opacity(0)]),
+                    Gradient(colors: [Color.white.opacity(brightness * collapse), Theme.reticle.opacity(0.4 * collapse), Theme.reticle.opacity(0)]),
                     center: center,
                     startRadius: 0,
                     endRadius: radius
@@ -236,10 +248,12 @@ extension View {
     }
 }
 
-/// A red pulse around the edges of the screen when the player's fleet is hit.
+/// A red pulse around the edges of the screen when the player's fleet is hit. Under Reduce Motion or
+/// Dim Flashing Lights the edges glow up gently instead of flashing.
 struct DamageFlash: View {
     let trigger: Int
     @State private var intensity = 0.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { proxy in
@@ -256,12 +270,13 @@ struct DamageFlash: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .onChange(of: trigger) {
-            withAnimation(.easeIn(duration: 0.08)) {
-                intensity = 1
+            let isGentle = reduceMotion || MotionPreferences.shared.dimsFlashingLights
+            withAnimation(.easeIn(duration: isGentle ? 0.4 : 0.08)) {
+                intensity = isGentle ? 0.35 : 1
             }
             Task {
-                try? await Task.sleep(for: .milliseconds(140))
-                withAnimation(.easeOut(duration: 0.8)) {
+                try? await Task.sleep(for: .milliseconds(isGentle ? 450 : 140))
+                withAnimation(.easeOut(duration: isGentle ? 1.2 : 0.8)) {
                     intensity = 0
                 }
             }

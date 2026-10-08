@@ -90,7 +90,7 @@ struct AuthForm: View {
                 .frame(height: 104)
                 .accessibilityHidden(true)
                 Text(title)
-                    .font(.display(22, weight: .heavy))
+                    .displayFont(22, weight: .heavy)
                     .multilineTextAlignment(.center)
                     .contentTransition(.opacity)
                 Text(subtitle)
