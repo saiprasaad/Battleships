@@ -16,6 +16,7 @@ struct GamesController: RouteCollection {
         game.post("decline", use: decline)
         game.post("cancel", use: cancel)
         game.post("resign", use: resign)
+        game.post("claim-victory", use: claimVictory)
         game.post("shots", use: fire)
     }
 
@@ -57,6 +58,11 @@ struct GamesController: RouteCollection {
     @Sendable
     func resign(req: Request) async throws -> GameDetail {
         try await services.games.resign(gameID(req), by: req.auth.require(User.self), on: req.db)
+    }
+
+    @Sendable
+    func claimVictory(req: Request) async throws -> GameDetail {
+        try await services.games.claimVictory(gameID(req), by: req.auth.require(User.self), on: req.db)
     }
 
     @Sendable

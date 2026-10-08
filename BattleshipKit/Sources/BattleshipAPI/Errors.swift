@@ -41,6 +41,7 @@ public struct APIErrorCode: RawRepresentable, Codable, Sendable, Hashable, Expre
     public static let alreadyTargeted: APIErrorCode = "already_targeted"
     public static let outOfBounds: APIErrorCode = "out_of_bounds"
     public static let gameOver: APIErrorCode = "game_over"
+    public static let opponentStillHasTime: APIErrorCode = "opponent_still_has_time"
 }
 
 /// The JSON body of every non-2xx response: `{"code": "not_your_turn", "message": "It's not your turn."}`.

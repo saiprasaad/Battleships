@@ -93,6 +93,9 @@ enum LobbyEntry: Identifiable, Hashable, Sendable {
                 return game.isIncomingChallenge ? "Challenged you" : "Waiting for them to accept"
             case .active:
                 let fleet = "\(game.yourShipsRemaining) vs \(game.opponentShipsRemaining) ships"
+                if game.canClaimVictory() {
+                    return "Their time is up · claim the win"
+                }
                 return game.isYourTurn ? "Your move · \(fleet)" : "Their move · \(fleet)"
             case .finished:
                 return Self.result(didWin: game.didWin == true, reason: game.outcome?.reason)
@@ -116,8 +119,10 @@ enum LobbyEntry: Identifiable, Hashable, Sendable {
     private static func result(didWin: Bool, reason: Outcome.Reason?) -> String {
         switch (didWin, reason) {
         case (true, .resignation): "Won · opponent resigned"
+        case (true, .timeout): "Won · opponent ran out of time"
         case (true, _): "Won"
         case (false, .resignation): "Lost · resigned"
+        case (false, .timeout): "Lost · ran out of time"
         case (false, _): "Lost"
         }
     }

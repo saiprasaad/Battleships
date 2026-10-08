@@ -28,6 +28,8 @@ struct ServerSettings: Sendable {
     var finishedGamesInLobby: Int
     var sessionLifetime: TimeInterval
     var bcryptCost: Int
+    /// How long a player has to make their move before the opponent can claim the win.
+    var turnTimeLimit: TimeInterval
 
     static func load(for environment: Environment) throws -> ServerSettings {
         let testing = environment == .testing
@@ -66,7 +68,8 @@ struct ServerSettings: Sendable {
             maxOpenGamesPerPlayer: Environment.get("MAX_OPEN_GAMES").flatMap(Int.init) ?? 20,
             finishedGamesInLobby: 25,
             sessionLifetime: 60 * 60 * 24 * 90,
-            bcryptCost: testing ? 4 : 12
+            bcryptCost: testing ? 4 : 12,
+            turnTimeLimit: 60 * 60 * (Environment.get("TURN_TIME_LIMIT_HOURS").flatMap(Double.init) ?? 72)
         )
     }
 }

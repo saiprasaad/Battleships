@@ -71,8 +71,12 @@ extension Move: Codable {
 
 public struct Outcome: Hashable, Sendable, Codable {
     public enum Reason: String, Hashable, Sendable, Codable {
+        /// Every ship of the loser was sunk.
         case fleetDestroyed
+        /// The loser gave up.
         case resignation
+        /// The loser took too long to move and their opponent claimed the win.
+        case timeout
     }
 
     public let winner: Player
@@ -134,13 +138,16 @@ public struct Battle: Hashable, Sendable {
     }
 
     /// Rebuilds a stored game by replaying its moves, verifying every recorded result.
+    ///
+    /// - Parameter forfeit: how the game ended, if it ended without a fleet being sunk
+    ///   (a resignation or a timeout). Ignored for `.fleetDestroyed`, which the moves determine.
     public init(
         mode: GameMode,
         fleetOne: [ShipPlacement],
         fleetTwo: [ShipPlacement],
         firstPlayer: Player = .one,
         replaying recordedMoves: [Move],
-        resignedBy resigningPlayer: Player? = nil
+        forfeit: Outcome? = nil
     ) throws {
         try self.init(mode: mode, fleetOne: fleetOne, fleetTwo: fleetTwo, firstPlayer: firstPlayer)
         for recorded in recordedMoves {
@@ -149,8 +156,8 @@ public struct Battle: Hashable, Sendable {
                 throw BattleError.corrupted("\(recorded.target) recorded as \(recorded.result) but is \(replayed.result)")
             }
         }
-        if let resigningPlayer {
-            try resign(resigningPlayer)
+        if let forfeit, forfeit.reason != .fleetDestroyed {
+            try self.forfeit(forfeit.loser, reason: forfeit.reason)
         }
     }
 
@@ -216,8 +223,14 @@ public struct Battle: Hashable, Sendable {
 
     /// Concedes the game; the other player wins.
     public mutating func resign(_ player: Player) throws {
+        try forfeit(player, reason: .resignation)
+    }
+
+    /// Ends the game in the opponent's favour without sinking `player`'s fleet.
+    public mutating func forfeit(_ player: Player, reason: Outcome.Reason) throws {
         guard outcome == nil else { throw BattleError.gameOver }
-        outcome = Outcome(winner: player.opponent, reason: .resignation)
+        precondition(reason != .fleetDestroyed, "A destroyed fleet is decided by the moves, not declared")
+        outcome = Outcome(winner: player.opponent, reason: reason)
     }
 
     /// The game as `player` is allowed to see it: their own fleet in full, but only the opposing ships
@@ -251,7 +264,7 @@ extension Battle: Codable {
                 fleetTwo: container.decode([ShipPlacement].self, forKey: .fleetTwo),
                 firstPlayer: container.decode(Player.self, forKey: .firstPlayer),
                 replaying: container.decode([Move].self, forKey: .moves),
-                resignedBy: outcome?.reason == .resignation ? outcome?.loser : nil
+                forfeit: outcome
             )
         } catch let error as DecodingError {
             throw error

@@ -21,6 +21,7 @@ struct AppError: AbortError, Equatable {
     static let gameNotFound = AppError(.notFound, .gameNotFound, "That game doesn't exist, or you're not playing in it.")
     static let playerNotFound = AppError(.notFound, .playerNotFound, "There's no player with that username.")
     static let cannotChallengeYourself = AppError(.badRequest, .cannotChallengeYourself, "You can't challenge yourself.")
+    static let opponentStillHasTime = AppError(.conflict, .opponentStillHasTime, "Your opponent still has time to make their move.")
 
     static func tooManyGames(limit: Int) -> AppError {
         AppError(.conflict, .tooManyGames, "You already have \(limit) games going. Finish or resign one first.")

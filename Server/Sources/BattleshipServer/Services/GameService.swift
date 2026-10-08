@@ -29,13 +29,13 @@ struct GameService: Sendable {
             .all()
         return try (unfinished + finished).compactMap { game in
             guard let seat = game.seat(of: userID) else { return nil }
-            return try GamePresenter.summary(of: game, for: seat)
+            return try notifier.presenter.summary(of: game, for: seat)
         }
     }
 
     func game(_ gameID: UUID, for user: User, on db: any Database) async throws -> GameDetail {
         let (game, seat) = try await load(gameID, for: user, on: db)
-        return try GamePresenter.detail(of: game, for: seat)
+        return try notifier.presenter.detail(of: game, for: seat)
     }
 
     // MARK: Starting games
@@ -80,7 +80,7 @@ struct GameService: Sendable {
 
         await notifier.broadcast(game)
         notifier.push(.challenge(from: user.username, mode: mode, gameID: try game.requireID()), to: opponent.id)
-        return try GamePresenter.detail(of: game, for: .one)
+        return try notifier.presenter.detail(of: game, for: .one)
     }
 
     private func matchmake(mode: GameMode, fleet: [ShipPlacement], by user: User, on db: any Database) async throws -> GameDetail {
@@ -103,7 +103,7 @@ struct GameService: Sendable {
 
             await notifier.broadcast(game)
             notifier.push(.opponentFound(user.username, gameID: try game.requireID()), to: game.userID(at: .one))
-            return try GamePresenter.detail(of: game, for: .two)
+            return try notifier.presenter.detail(of: game, for: .two)
         }
 
         let game = GameRecord(mode: mode, status: .matchmaking, playerOneID: userID, playerTwoID: nil, fleetOne: fleet)
@@ -111,7 +111,7 @@ struct GameService: Sendable {
         game.$playerOne.value = user
         game.$playerTwo.value = .some(nil)
         await notifier.broadcast(game)
-        return try GamePresenter.detail(of: game, for: .one)
+        return try notifier.presenter.detail(of: game, for: .one)
     }
 
     // MARK: Answering challenges
@@ -131,7 +131,7 @@ struct GameService: Sendable {
 
             await notifier.broadcast(game)
             notifier.push(.challengeAccepted(by: user.username, gameID: gameID), to: game.userID(at: .one))
-            return try GamePresenter.detail(of: game, for: .two)
+            return try notifier.presenter.detail(of: game, for: .two)
         }
     }
 
@@ -189,7 +189,7 @@ struct GameService: Sendable {
             } else {
                 notifier.push(.incoming(move, from: user.username, gameID: gameID), to: opponentID)
             }
-            return FireResponse(move: move, game: try GamePresenter.detail(of: game, for: seat))
+            return FireResponse(move: move, game: try notifier.presenter.detail(of: game, for: seat))
         }
     }
 
@@ -205,7 +205,30 @@ struct GameService: Sendable {
 
             await notifier.broadcast(game)
             notifier.push(.opponentResigned(user.username, gameID: gameID), to: game.userID(at: seat.opponent))
-            return try GamePresenter.detail(of: game, for: seat)
+            return try notifier.presenter.detail(of: game, for: seat)
+        }
+    }
+
+    /// Wins a battle whose opponent has let their move time run out.
+    func claimVictory(_ gameID: UUID, by user: User, on db: any Database) async throws -> GameDetail {
+        try await writeLock.withLock {
+            let (game, seat) = try await load(gameID, for: user, on: db)
+            guard game.status == .active, var battle = try game.battle() else {
+                throw AppError.invalidState("Only a battle in progress can be won on time.")
+            }
+            guard battle.turn == seat.opponent else {
+                throw AppError.invalidState("It's your move, so there's nothing to claim.")
+            }
+            guard Date() >= game.lastActivity.addingTimeInterval(settings.turnTimeLimit) else {
+                throw AppError.opponentStillHasTime
+            }
+            try battle.forfeit(seat.opponent, reason: .timeout)
+            game.apply(battle)
+            try await commit(game, on: db)
+
+            await notifier.broadcast(game)
+            notifier.push(.outOfTime(claimedBy: user.username, gameID: gameID), to: game.userID(at: seat.opponent))
+            return try notifier.presenter.detail(of: game, for: seat)
         }
     }
 

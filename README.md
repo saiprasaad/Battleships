@@ -15,7 +15,7 @@ A native iOS Battleships game with its own backend, written in Swift end to end.
 | **Classic** | 10×10 | Carrier (5), Battleship (4), Cruiser (3), Submarine (3), Destroyer (2) |
 | **Quick** | 5×5 | Five single-cell patrol boats: the original Battleships rules |
 
-Players alternate single shots. A ship sinks when every square of it has been hit, and its position is then revealed. Sink the whole enemy fleet to win. Ships may touch but not overlap.
+Players alternate single shots. A ship sinks when every square of it has been hit, and its position is then revealed. Sink the whole enemy fleet to win. Ships may touch but not overlap. Online, each move has a time limit (three days by default); if a player lets it run out, their opponent can claim the win.
 
 Against the computer you choose a difficulty:
 
@@ -71,6 +71,7 @@ The server is a single binary (or a small Docker image) configured entirely with
 | `LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `notice`, `warning`, `error` or `critical`. |
 | `AUTH_RATE_LIMIT_PER_MINUTE` | `20` | Sign-in and registration attempts allowed per IP per minute. |
 | `MAX_OPEN_GAMES` | `20` | Games a player can have in progress or waiting at once. |
+| `TURN_TIME_LIMIT_HOURS` | `72` | How long a player has to move before their opponent can claim the win. |
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC`, `APNS_PRIVATE_KEY` (or `APNS_PRIVATE_KEY_PATH`) | *unset* | Push notifications; see below. |
 
 Database migrations run automatically on start-up.
@@ -117,6 +118,7 @@ All endpoints are JSON under `/v1`. Authenticated ones need `Authorization: Bear
 | `POST` | `/v1/games/:id/cancel` | Withdraw a game that hasn't started |
 | `POST` | `/v1/games/:id/shots` | `{target: "B7"}` → `{move, game}` |
 | `POST` | `/v1/games/:id/resign` | Resign |
+| `POST` | `/v1/games/:id/claim-victory` | Win a game whose opponent let their turn time run out |
 | `POST` | `/v1/devices` | Register an APNs device token |
 | `DELETE` | `/v1/devices/:token` | Unregister it |
 | `GET` | `/v1/events` | WebSocket of `hello`, `gameUpdated` and `gameRemoved` events |

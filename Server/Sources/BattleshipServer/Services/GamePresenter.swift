@@ -3,8 +3,10 @@ import BattleshipCore
 import Vapor
 
 /// Turns stored games into the redacted views each player is allowed to see.
-enum GamePresenter {
-    static func summary(of game: GameRecord, battle: Battle?, for seat: Player) throws -> GameSummary {
+struct GamePresenter: Sendable {
+    let turnTimeLimit: TimeInterval
+
+    func summary(of game: GameRecord, battle: Battle?, for seat: Player) throws -> GameSummary {
         let fleetSize = game.mode.rules.fleet.count
         return GameSummary(
             id: try game.requireID(),
@@ -17,15 +19,16 @@ enum GamePresenter {
             yourShipsRemaining: battle?.remainingShips(of: seat) ?? fleetSize,
             opponentShipsRemaining: battle?.remainingShips(of: seat.opponent) ?? fleetSize,
             createdAt: game.createdAt ?? Date(),
-            updatedAt: game.updatedAt ?? game.createdAt ?? Date()
+            updatedAt: game.lastActivity,
+            turnDeadline: game.status == .active ? game.lastActivity.addingTimeInterval(turnTimeLimit) : nil
         )
     }
 
-    static func summary(of game: GameRecord, for seat: Player) throws -> GameSummary {
+    func summary(of game: GameRecord, for seat: Player) throws -> GameSummary {
         try summary(of: game, battle: game.battle(), for: seat)
     }
 
-    static func detail(of game: GameRecord, for seat: Player) throws -> GameDetail {
+    func detail(of game: GameRecord, for seat: Player) throws -> GameDetail {
         let battle = try game.battle()
         let knownOpponentShips: [ShipPlacement] = if let battle {
             // Sunk ships are public knowledge; everything is revealed once the game ends.

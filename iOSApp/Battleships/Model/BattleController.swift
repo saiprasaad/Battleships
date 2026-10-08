@@ -145,10 +145,14 @@ final class BattleController {
             return perspective.isMyTurn ? "Your move. Pick a target." : "Waiting for \(opponentName)…"
         case .finished:
             guard let perspective, let didWin = perspective.didWin else { return "Game over" }
-            if perspective.outcome?.reason == .resignation {
+            switch perspective.outcome?.reason {
+            case .resignation:
                 return didWin ? "Victory! \(opponentName) resigned." : "You resigned."
+            case .timeout:
+                return didWin ? "Victory! \(opponentName) ran out of time." : "Defeat. You ran out of time."
+            case .fleetDestroyed, nil:
+                return didWin ? "Victory! Enemy fleet destroyed." : "Defeat. Your fleet is gone."
             }
-            return didWin ? "Victory! Enemy fleet destroyed." : "Defeat. Your fleet is gone."
         }
     }
 
@@ -158,6 +162,11 @@ final class BattleController {
 
     var canFire: Bool {
         isMyTurn && aimed != nil && !isSubmitting
+    }
+
+    /// The opponent has let their time to move run out, so the player can take the win.
+    var canClaimVictory: Bool {
+        phase == .battle && onlineGame?.summary.canClaimVictory() == true
     }
 
     // MARK: Lifecycle
@@ -247,6 +256,15 @@ final class BattleController {
         case let .solo(id):
             guard var match = app.solo.match(id), (try? match.resign()) != nil else { return }
             app.solo.update(match)
+        }
+        syncMoves()
+    }
+
+    func claimVictory() async {
+        do {
+            try await app.online.claimVictory(gameID)
+        } catch {
+            errorMessage = error.userMessage
         }
         syncMoves()
     }

@@ -128,6 +128,10 @@ final class OnlineGamesStore {
         apply(try await api.resign(gameID: id))
     }
 
+    func claimVictory(_ id: UUID) async throws {
+        apply(try await api.claimVictory(gameID: id))
+    }
+
     func fire(_ id: UUID, at target: Coordinate) async throws -> Move {
         let response = try await api.fire(gameID: id, at: target)
         apply(response.game)

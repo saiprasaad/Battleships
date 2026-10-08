@@ -72,14 +72,12 @@ final class GameRecord: Model, @unchecked Sendable {
     /// Replays the stored moves. `nil` until both fleets are in.
     func battle() throws -> Battle? {
         guard let fleetTwo, status == .active || status == .finished else { return nil }
-        let outcome = outcome
-        return try Battle(
-            mode: mode,
-            fleetOne: fleetOne,
-            fleetTwo: fleetTwo,
-            replaying: moves,
-            resignedBy: outcome?.reason == .resignation ? outcome?.loser : nil
-        )
+        return try Battle(mode: mode, fleetOne: fleetOne, fleetTwo: fleetTwo, replaying: moves, forfeit: outcome)
+    }
+
+    /// When the last move (or the start of the battle) happened.
+    var lastActivity: Date {
+        updatedAt ?? createdAt ?? Date()
     }
 
     /// Copies a battle's progress back into the record.

@@ -162,6 +162,12 @@ struct BattleView: View {
                     isWaiting: controller.phase == .battle && !controller.isMyTurn
                 )
 
+                if controller.canClaimVictory {
+                    ClaimVictoryCard(opponentName: controller.opponentName) {
+                        Task { await controller.claimVictory() }
+                    }
+                }
+
                 if horizontalSizeClass == .regular {
                     HStack(alignment: .top, spacing: 28) {
                         BoardSection(title: "Enemy Waters") { targetBoard(perspective) }

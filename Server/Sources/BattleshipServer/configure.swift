@@ -82,7 +82,14 @@ func configure(_ app: Application, pushService: (any PushService)? = nil) async 
 
     let writeLock = AsyncLock()
     let hub = RealtimeHub(logger: app.logger)
-    let notifier = Notifier(hub: hub, push: push, writeLock: writeLock, database: { [app] in app.db }, logger: app.logger)
+    let notifier = Notifier(
+        presenter: GamePresenter(turnTimeLimit: settings.turnTimeLimit),
+        hub: hub,
+        push: push,
+        writeLock: writeLock,
+        database: { [app] in app.db },
+        logger: app.logger
+    )
     app.appServices = AppServices(
         settings: settings,
         writeLock: writeLock,

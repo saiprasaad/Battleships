@@ -112,6 +112,11 @@ public final class APIClient: Sendable {
         try await send("POST", "v1/games/\(gameID.uuidString)/resign")
     }
 
+    /// Wins a game whose opponent has run out of time (see ``GameSummary/turnDeadline``).
+    public func claimVictory(gameID: UUID) async throws -> GameDetail {
+        try await send("POST", "v1/games/\(gameID.uuidString)/claim-victory")
+    }
+
     public func fire(gameID: UUID, at target: Coordinate) async throws -> FireResponse {
         try await send("POST", "v1/games/\(gameID.uuidString)/shots", body: FireRequest(target: target))
     }

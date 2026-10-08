@@ -223,6 +223,57 @@ final class EndToEndTests: ServerTestCase {
         return collector
     }
 
+    func testClaimingVictoryWhenTheOpponentRunsOutOfTime() async throws {
+        let baseURL = try await startServer()
+        let alice = try await signedInClient("alice", baseURL: baseURL)
+        let bob = try await signedInClient("bob", baseURL: baseURL)
+        try await bob.registerDevice(DeviceRegistration(token: String(repeating: "d", count: 64), environment: .sandbox))
+
+        let game = try await alice.createGame(CreateGameRequest(mode: .classic, fleet: Fleets.topLeft, opponent: "bob"))
+        XCTAssertNil(game.summary.turnDeadline, "no clock until the battle starts")
+        let accepted = try await bob.acceptChallenge(gameID: game.id, fleet: Fleets.bottomRight)
+        let deadline = try XCTUnwrap(accepted.summary.turnDeadline)
+        XCTAssertEqual(deadline.timeIntervalSince(accepted.summary.updatedAt), 72 * 3600, accuracy: 1)
+        // Bob is waiting on Alice: once her time is up (but not before), he could claim.
+        XCTAssertFalse(accepted.summary.canClaimVictory())
+        XCTAssertTrue(accepted.summary.canClaimVictory(at: deadline.addingTimeInterval(1)))
+
+        // Alice moves; now Bob has 72 hours, and Alice can't claim yet.
+        _ = try await alice.fire(gameID: game.id, at: Coordinate("J1")!)
+        await assertAPIError(.opponentStillHasTime) { try await alice.claimVictory(gameID: game.id) }
+        await assertAPIError(.invalidGameState) { try await bob.claimVictory(gameID: game.id) }
+    }
+
+    func testClaimedVictoriesCountAsWins() async throws {
+        // A zero-hour limit means the waiting player can claim straight away.
+        try await app.asyncShutdown()
+        setenv("TURN_TIME_LIMIT_HOURS", "0", 1)
+        defer { unsetenv("TURN_TIME_LIMIT_HOURS") }
+        app = try await Application.make(.testing)
+        try await configure(app, pushService: push)
+
+        let baseURL = try await startServer()
+        let alice = try await signedInClient("alice", baseURL: baseURL)
+        let bob = try await signedInClient("bob", baseURL: baseURL)
+        try await bob.registerDevice(DeviceRegistration(token: String(repeating: "e", count: 64), environment: .sandbox))
+        let game = try await alice.createGame(CreateGameRequest(mode: .quick, fleet: Rules.quick.randomFleet(), opponent: "bob"))
+        _ = try await bob.acceptChallenge(gameID: game.id, fleet: Rules.quick.randomFleet())
+        _ = try await alice.fire(gameID: game.id, at: Coordinate("A1")!)
+
+        let claimed = try await alice.claimVictory(gameID: game.id)
+        XCTAssertEqual(claimed.summary.status, .finished)
+        XCTAssertEqual(claimed.summary.outcome, Outcome(winner: .one, reason: .timeout))
+        XCTAssertNil(claimed.summary.turnDeadline)
+        XCTAssertEqual(claimed.knownOpponentShips.count, 5, "the fleet is revealed once it's over")
+        let aliceAccount = try await alice.account()
+        let bobAccount = try await bob.account()
+        XCTAssertEqual(aliceAccount.stats.wins, 1)
+        XCTAssertEqual(bobAccount.stats.losses, 1)
+        let notice = try await waitForPush { $0.title == "Out of time" }
+        XCTAssertEqual(notice.body, "You didn't move in time, so alice claimed the win.")
+        await assertAPIError(.invalidGameState) { try await alice.claimVictory(gameID: game.id) }
+    }
+
     func testDeletingAnAccountResignsItsBattles() async throws {
         let baseURL = try await startServer()
         let alice = try await signedInClient("alice", baseURL: baseURL)

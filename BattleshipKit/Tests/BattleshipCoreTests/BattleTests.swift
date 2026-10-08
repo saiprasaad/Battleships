@@ -81,6 +81,26 @@ struct BattleTests {
         #expect(battle.isOver)
     }
 
+    @Test func runningOutOfTimeForfeitsTheGame() throws {
+        var battle = try makeClassicBattle()
+        try battle.fire(.one, at: Coordinate("A1")!)
+        try battle.forfeit(.two, reason: .timeout)
+        #expect(battle.outcome == Outcome(winner: .one, reason: .timeout))
+        #expect(battle.turn == nil)
+
+        // Stored and restored, the timeout survives.
+        let restored = try JSONDecoder().decode(Battle.self, from: JSONEncoder().encode(battle))
+        #expect(restored == battle)
+        let replayed = try Battle(
+            mode: .classic,
+            fleetOne: battle.fleet(of: .one),
+            fleetTwo: battle.fleet(of: .two),
+            replaying: battle.moves,
+            forfeit: battle.outcome
+        )
+        #expect(replayed.outcome == Outcome(winner: .one, reason: .timeout))
+    }
+
     @Test func rejectsIllegalFleets() {
         #expect(throws: FleetError.self) {
             try Battle(mode: .quick, fleetOne: RulesTests.classicFleet, fleetTwo: Rules.quick.randomFleet())

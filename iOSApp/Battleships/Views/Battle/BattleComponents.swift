@@ -152,6 +152,35 @@ struct AnnouncementBanner: View {
     }
 }
 
+/// Offered when the opponent has let their time to move run out.
+struct ClaimVictoryCard: View {
+    let opponentName: String
+    let onClaim: @MainActor () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "hourglass.bottomhalf.filled")
+                .font(.title2)
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(opponentName) is out of time")
+                    .font(.headline)
+                Text("They haven't fired in days. You can take the win.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("Claim Victory") { onClaim() }
+                .primaryActionStyle()
+                .tint(.orange)
+        }
+        .padding(14)
+        .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// An incoming challenge, waiting for an answer.
 struct ChallengeCard: View {
     let opponentName: String
@@ -297,8 +326,10 @@ struct GameOverOverlay: View {
     private var subtitle: String {
         switch (didWin, reason) {
         case (true, .resignation): "\(opponentName) struck their colours."
+        case (true, .timeout): "\(opponentName) ran out of time to move."
         case (true, _): "You sent the enemy fleet to the bottom."
         case (false, .resignation): "You resigned. There's always the next battle."
+        case (false, .timeout): "You ran out of time to make your move."
         case (false, _): "\(opponentName) sank your entire fleet."
         }
     }

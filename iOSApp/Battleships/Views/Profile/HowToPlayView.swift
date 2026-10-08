@@ -18,6 +18,9 @@ struct HowToPlayView: View {
                 Rule(icon: "trophy.fill", title: "Win") {
                     Text("Sink the entire enemy fleet before they sink yours. Online wins raise your rating; beating a stronger captain earns more.")
                 }
+                Rule(icon: "hourglass", title: "Keep it moving") {
+                    Text("Online, each move has a time limit (three days on the standard server). If your opponent lets it run out, you can claim the win.")
+                }
             }
 
             Section("Rules") {

@@ -25,6 +25,9 @@ public struct GameSummary: Codable, Sendable, Hashable, Identifiable {
     public var opponentShipsRemaining: Int
     public var createdAt: Date
     public var updatedAt: Date
+    /// When the player whose turn it is runs out of time. After this, their opponent can claim the win.
+    /// `nil` unless the game is active.
+    public var turnDeadline: Date?
 
     public init(
         id: UUID,
@@ -37,7 +40,8 @@ public struct GameSummary: Codable, Sendable, Hashable, Identifiable {
         yourShipsRemaining: Int,
         opponentShipsRemaining: Int,
         createdAt: Date,
-        updatedAt: Date
+        updatedAt: Date,
+        turnDeadline: Date? = nil
     ) {
         self.id = id
         self.mode = mode
@@ -50,6 +54,7 @@ public struct GameSummary: Codable, Sendable, Hashable, Identifiable {
         self.opponentShipsRemaining = opponentShipsRemaining
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.turnDeadline = turnDeadline
     }
 
     public var isYourTurn: Bool { status == .active && turn == you }
@@ -62,6 +67,12 @@ public struct GameSummary: Codable, Sendable, Hashable, Identifiable {
     /// `true` if you won, `false` if you lost, `nil` if the game isn't over.
     public var didWin: Bool? {
         outcome.map { $0.winner == you }
+    }
+
+    /// Your opponent has used up their time to move, so you can claim the win.
+    public func canClaimVictory(at now: Date = Date()) -> Bool {
+        guard isTheirTurn, let turnDeadline else { return false }
+        return now >= turnDeadline
     }
 
     public var opponentName: String {

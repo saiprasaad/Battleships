@@ -6,6 +6,7 @@ import Vapor
 /// Tells players about changes to their games: instantly over WebSocket, and by push notification
 /// for the things worth interrupting someone for.
 struct Notifier: Sendable {
+    let presenter: GamePresenter
     let hub: RealtimeHub
     let push: any PushService
     let writeLock: AsyncLock
@@ -17,7 +18,7 @@ struct Notifier: Sendable {
         for seat in Player.allCases {
             guard let userID = game.userID(at: seat) else { continue }
             do {
-                let detail = try GamePresenter.detail(of: game, for: seat)
+                let detail = try presenter.detail(of: game, for: seat)
                 await hub.send(.gameUpdated(detail), to: userID)
             } catch {
                 logger.error("Could not present game \(game.id?.uuidString ?? "?"): \(error)")
@@ -85,6 +86,10 @@ extension PushMessage {
 
     static func opponentResigned(_ opponent: String, gameID: UUID) -> PushMessage {
         PushMessage(title: "Victory!", body: "\(opponent) resigned. You win!", gameID: gameID)
+    }
+
+    static func outOfTime(claimedBy opponent: String, gameID: UUID) -> PushMessage {
+        PushMessage(title: "Out of time", body: "You didn't move in time, so \(opponent) claimed the win.", gameID: gameID)
     }
 
     static func opponentLeft(gameID: UUID) -> PushMessage {
