@@ -11,19 +11,24 @@ import FoundationNetworking
 /// bearer token. When the server rejects the token, calls throw ``APIError/unauthorized`` and the
 /// handler installed with ``setUnauthorizedHandler(_:)`` runs, so the app can return to sign-in.
 public final class APIClient: Sendable {
-    public let baseURL: URL
     private let session: URLSession
     private let state: Locked<State>
 
     private struct State {
+        var baseURL: URL
         var token: String?
         var onUnauthorized: (@Sendable () -> Void)?
     }
 
     public init(baseURL: URL, token: String? = nil, session: URLSession = .shared) {
-        self.baseURL = baseURL
         self.session = session
-        self.state = Locked(State(token: token))
+        self.state = Locked(State(baseURL: baseURL, token: token))
+    }
+
+    /// The server's root URL. Sessions belong to one server, so clear ``token`` when changing it.
+    public var baseURL: URL {
+        get { state.withLock { $0.baseURL } }
+        set { state.withLock { $0.baseURL = newValue } }
     }
 
     public var token: String? {

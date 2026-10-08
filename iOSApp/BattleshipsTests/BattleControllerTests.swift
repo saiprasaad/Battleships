@@ -1,0 +1,110 @@
+import BattleshipAPI
+import BattleshipCore
+import Foundation
+import Testing
+@testable import Battleships
+
+@MainActor
+@Suite("Battle screen")
+struct BattleControllerTests {
+    @Test func aimingThenFiringAgainstTheComputer() async throws {
+        let (app, feedback) = makeTestApp()
+        let match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
+        let controller = BattleController(route: .solo(match.id), app: app)
+        await controller.load()
+
+        #expect(controller.phase == .battle)
+        #expect(controller.isMyTurn)
+        #expect(controller.statusLine == "Your move. Pick a target.")
+        #expect(!controller.canFire, "nothing aimed yet")
+
+        let target = Coordinate("C3")!
+        controller.tapTarget(target)
+        #expect(controller.aimed == target)
+        #expect(controller.canFire)
+        #expect(feedback.events.last == .aim)
+
+        await controller.fire()
+
+        // The player's shot, then the computer's reply.
+        let played = try #require(app.solo.match(match.id))
+        #expect(played.battle.moves.count == 2)
+        #expect(played.battle.moves.first?.target == target)
+        #expect(controller.aimed == nil)
+        #expect(controller.isMyTurn)
+        #expect(feedback.events.contains(.fire))
+        #expect(controller.effects.contains { $0.board == .target && $0.coordinate == target })
+        #expect(controller.effects.contains { $0.board == .home })
+        #expect(controller.announcement != nil, "the computer's shot is announced")
+    }
+
+    @Test func refusesSquaresAlreadyFiredAt() async throws {
+        let (app, feedback) = makeTestApp()
+        let match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
+        let controller = BattleController(route: .solo(match.id), app: app)
+        await controller.load()
+
+        controller.tapTarget(Coordinate("A1")!)
+        await controller.fire()
+        controller.tapTarget(Coordinate("A1")!)
+        #expect(controller.aimed == nil)
+        #expect(feedback.events.last == .invalid)
+    }
+
+    @Test func tappingTheAimedSquareAgainFires() async throws {
+        let (app, _) = makeTestApp()
+        let match = try app.solo.start(mode: .classic, difficulty: .medium, fleet: Rules.classic.randomFleet())
+        let controller = BattleController(route: .solo(match.id), app: app)
+        await controller.load()
+
+        controller.tapTarget(Coordinate("E5")!)
+        controller.tapTarget(Coordinate("E5")!)
+        // Firing happens in a task; give it (and the computer's reply) time to land.
+        for _ in 0..<40 where (app.solo.match(match.id)?.battle.moves.count ?? 0) < 2 {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(app.solo.match(match.id)?.battle.moves.first?.target == Coordinate("E5"))
+    }
+
+    @Test func resigningEndsTheBattle() async throws {
+        let (app, feedback) = makeTestApp()
+        let match = try app.solo.start(mode: .classic, difficulty: .hard, fleet: Rules.classic.randomFleet())
+        let controller = BattleController(route: .solo(match.id), app: app)
+        await controller.load()
+
+        await controller.resign()
+        #expect(controller.phase == .finished)
+        #expect(controller.statusLine == "You resigned.")
+        #expect(controller.perspective?.didWin == false)
+        #expect(app.solo.record.losses[.hard] == 1)
+        #expect(feedback.events.contains(.defeat))
+    }
+
+    @Test func reopeningAFinishedGameDoesNotReplayIt() async throws {
+        let (app, feedback) = makeTestApp()
+        var match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
+        try match.resign()
+        app.solo.update(match)
+
+        let controller = BattleController(route: .solo(match.id), app: app)
+        await controller.load()
+        #expect(controller.phase == .finished)
+        #expect(controller.effects.isEmpty)
+        #expect(!feedback.events.contains(.defeat))
+        #expect(!controller.showsOutcome)
+    }
+
+    @Test func missingGamesAreReportedAsUnavailable() async {
+        let (app, _) = makeTestApp()
+        let controller = BattleController(route: .solo(UUID()), app: app)
+        await controller.load()
+        #expect(controller.phase == .unavailable("This game no longer exists."))
+    }
+
+    @Test func rematchPrefillsTheNewGameSheet() throws {
+        let (app, _) = makeTestApp()
+        let match = try app.solo.start(mode: .quick, difficulty: .hard, fleet: Rules.quick.randomFleet())
+        app.requestRematch(of: .solo(match.id))
+        #expect(app.newGameRequest == NewGameDraft(opponent: .computer, difficulty: .hard, mode: .quick))
+    }
+}
