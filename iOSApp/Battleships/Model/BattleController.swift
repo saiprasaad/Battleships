@@ -37,6 +37,19 @@ final class BattleController {
         let isGoodNews: Bool
     }
 
+    /// The feel of the moment, which colours the headline at the top of the battle.
+    enum Mood: Equatable {
+        case neutral
+        /// The player's turn to fire.
+        case ready
+        /// Waiting on the opponent.
+        case waiting
+        /// The computer is about to fire.
+        case danger
+        case triumph
+        case defeat
+    }
+
     let route: GameRoute
     /// The cell the player has lined up. Tapping it again fires.
     var aimed: Coordinate?
@@ -47,6 +60,10 @@ final class BattleController {
     private(set) var effects: [ImpactEffect] = []
     private(set) var announcement: Announcement?
     private(set) var loadError: String?
+    /// Counts the player's hits on the enemy, so the screen can react to each one.
+    private(set) var hitsLanded = 0
+    /// Counts the enemy's hits on the player's fleet.
+    private(set) var hitsTaken = 0
 
     @ObservationIgnored private let app: AppModel
     @ObservationIgnored private var seenMoveCount: Int?
@@ -142,7 +159,7 @@ final class BattleController {
         case .battle:
             if isComputerThinking { return "The computer is taking aim…" }
             guard let perspective else { return "" }
-            return perspective.isMyTurn ? "Your move. Pick a target." : "Waiting for \(opponentName)…"
+            return perspective.isMyTurn ? "Pick a target in enemy waters." : "Waiting for \(opponentName) to fire…"
         case .finished:
             guard let perspective, let didWin = perspective.didWin else { return "Game over" }
             switch perspective.outcome?.reason {
@@ -153,6 +170,30 @@ final class BattleController {
             case .fleetDestroyed, nil:
                 return didWin ? "Victory! Enemy fleet destroyed." : "Defeat. Your fleet is gone."
             }
+        }
+    }
+
+    /// A word or two for the top of the battle screen, like "Your turn".
+    var headline: String {
+        switch phase {
+        case .loading: "Loading"
+        case .unavailable: "Unavailable"
+        case .waitingForOpponent: onlineGame?.summary.status == .matchmaking ? "Searching" : "Challenge sent"
+        case .challenged: "Challenged"
+        case .battle:
+            if isComputerThinking { "Incoming" } else if perspective?.isMyTurn == true { "Your turn" } else { "Their turn" }
+        case .finished: perspective?.didWin == true ? "Victory" : "Defeat"
+        }
+    }
+
+    var mood: Mood {
+        switch phase {
+        case .battle:
+            if isComputerThinking { .danger } else if perspective?.isMyTurn == true { .ready } else { .waiting }
+        case .finished:
+            perspective?.didWin == true ? .triumph : .defeat
+        case .loading, .unavailable, .waitingForOpponent, .challenged:
+            .neutral
         }
     }
 
@@ -347,6 +388,14 @@ final class BattleController {
         Task {
             try? await Task.sleep(for: .milliseconds(1200))
             effects.removeAll { $0.id == effect.id }
+        }
+
+        if move.result.isHit {
+            if isMine {
+                hitsLanded += 1
+            } else {
+                hitsTaken += 1
+            }
         }
 
         switch move.result {

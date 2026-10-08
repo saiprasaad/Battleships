@@ -11,18 +11,22 @@ struct BattleView: View {
     @State private var controller: BattleController
     @State private var confirmsResign = false
     @State private var showsAcceptSheet = false
+    @State private var showsFleet = false
 
     init(route: GameRoute, app: AppModel) {
-        _controller = State(initialValue: BattleController(route: route, app: app))
+        self.init(controller: BattleController(route: route, app: app))
+    }
+
+    init(controller: BattleController) {
+        _controller = State(initialValue: controller)
     }
 
     var body: some View {
         ZStack(alignment: .top) {
-            Theme.battleBackdrop
-                .ignoresSafeArea()
+            OceanBackdrop()
+            DamageFlash(trigger: controller.hitsTaken)
 
             content
-                .environment(\.colorScheme, .dark)
 
             if let announcement = controller.announcement {
                 AnnouncementBanner(announcement: announcement)
@@ -30,7 +34,6 @@ struct BattleView: View {
                     .padding(.horizontal)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .id(announcement.id)
-                    .environment(\.colorScheme, .dark)
             }
 
             if controller.showsOutcome, let perspective = controller.perspective, let didWin = perspective.didWin {
@@ -47,13 +50,15 @@ struct BattleView: View {
                 .zIndex(2)
             }
         }
+        .environment(\.colorScheme, .dark)
         .animation(.spring(duration: 0.4, bounce: 0.2), value: controller.announcement)
         .animation(.easeInOut(duration: 0.35), value: controller.showsOutcome)
         .navigationTitle(controller.opponentName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
-        .toolbarBackground(Color(red: 0.05, green: 0.17, blue: 0.33), for: .navigationBar)
+        .toolbarBackground(Theme.abyss.opacity(0.4), for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
+        .toolbar(.hidden, for: .tabBar)
         .toolbar { toolbarContent }
         .task { await controller.load() }
         .onChange(of: controller.perspective?.moves.count) { controller.syncMoves() }
@@ -95,6 +100,9 @@ struct BattleView: View {
                 }
             }
         }
+        .sheet(isPresented: $showsFleet) {
+            FleetSheet(controller: controller)
+        }
     }
 
     // MARK: Phases
@@ -105,6 +113,7 @@ struct BattleView: View {
         case .loading:
             ProgressView()
                 .controlSize(.large)
+                .tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
         case let .unavailable(reason):
@@ -147,48 +156,95 @@ struct BattleView: View {
 
         case .battle, .finished:
             if let perspective = controller.perspective {
-                battlefield(perspective)
+                if horizontalSizeClass == .regular {
+                    wideBattlefield(perspective)
+                } else {
+                    compactBattlefield(perspective)
+                }
             }
         }
     }
 
-    private func battlefield(_ perspective: BattlePerspective) -> some View {
+    /// iPhone: the HUD with a miniature of the player's fleet, and enemy waters filling the width.
+    private func compactBattlefield(_ perspective: BattlePerspective) -> some View {
         ScrollView {
-            VStack(spacing: 18) {
-                BattleHeader(
-                    perspective: perspective,
-                    statusLine: controller.statusLine,
-                    isMyTurn: controller.isMyTurn,
-                    isWaiting: controller.phase == .battle && !controller.isMyTurn
-                )
-
+            VStack(spacing: 14) {
+                hud(perspective, isWide: false)
                 if controller.canClaimVictory {
-                    ClaimVictoryCard(opponentName: controller.opponentName) {
-                        Task { await controller.claimVictory() }
-                    }
+                    claimVictoryCard
                 }
-
-                if horizontalSizeClass == .regular {
-                    HStack(alignment: .top, spacing: 28) {
-                        BoardSection(title: "Enemy Waters") { targetBoard(perspective) }
-                        BoardSection(title: "Your Fleet") { homeBoard(perspective) }
-                    }
-                } else {
-                    BoardSection(title: "Enemy Waters") { targetBoard(perspective) }
-                    BoardSection(title: "Your Fleet") {
-                        homeBoard(perspective)
-                            .frame(maxWidth: 250)
-                    }
+                BoardSection(title: "Enemy Waters", detail: shotsDetail(perspective.myStats)) {
+                    targetBoard(perspective)
                 }
             }
             .padding(.horizontal)
-            .padding(.bottom)
-            .frame(maxWidth: 1100)
-            .frame(maxWidth: .infinity)
+            .padding(.top, 6)
+            .padding(.bottom, 12)
         }
         .scrollBounceBehavior(.basedOnSize)
         .safeAreaInset(edge: .bottom) {
             bottomBar(perspective)
+        }
+    }
+
+    /// iPad: both boards at full size, side by side or one above the other, whichever fits bigger.
+    private func wideBattlefield(_ perspective: BattlePerspective) -> some View {
+        VStack(spacing: 16) {
+            hud(perspective, isWide: true)
+                .frame(maxWidth: 1040)
+            if controller.canClaimVictory {
+                claimVictoryCard
+                    .frame(maxWidth: 640)
+            }
+            GeometryReader { proxy in
+                let layout = BoardLayout(available: proxy.size)
+                let stack = layout.isStacked
+                    ? AnyLayout(VStackLayout(spacing: 18))
+                    : AnyLayout(HStackLayout(alignment: .top, spacing: 36))
+                stack {
+                    BoardSection(title: "Enemy Waters", detail: shotsDetail(perspective.myStats)) {
+                        targetBoard(perspective)
+                    }
+                    .frame(width: layout.side)
+                    BoardSection(title: "Your Fleet", detail: "\(perspective.enemyStats.hits) hits taken") {
+                        HomeBoard(perspective: perspective, effects: controller.effects, isUnderFire: isUnderFire)
+                            .shakes(on: controller.hitsTaken)
+                    }
+                    .frame(width: layout.side)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 8)
+        .safeAreaInset(edge: .bottom) {
+            bottomBar(perspective)
+                .frame(maxWidth: 680)
+        }
+    }
+
+    private func hud(_ perspective: BattlePerspective, isWide: Bool) -> some View {
+        BattleHUD(
+            perspective: perspective,
+            headline: controller.headline,
+            statusLine: controller.statusLine,
+            mood: controller.mood,
+            isWide: isWide
+        ) {
+            MiniMapButton(
+                perspective: perspective,
+                effects: controller.effects,
+                isUnderFire: isUnderFire,
+                hitsTaken: controller.hitsTaken
+            ) {
+                showsFleet = true
+            }
+        }
+    }
+
+    private var claimVictoryCard: some View {
+        ClaimVictoryCard(opponentName: controller.opponentName) {
+            Task { await controller.claimVictory() }
         }
     }
 
@@ -198,12 +254,19 @@ struct BattleView: View {
             aimed: controller.aimed,
             effects: controller.effects,
             isInteractive: controller.isMyTurn,
-            onTap: controller.tapTarget
+            onTap: { controller.tapTarget($0) }
         )
+        .shakes(on: controller.hitsLanded, amplitude: 4)
     }
 
-    private func homeBoard(_ perspective: BattlePerspective) -> some View {
-        HomeBoard(perspective: perspective, effects: controller.effects)
+    /// The enemy is the one to shoot, so the player's waters are under the gun.
+    private var isUnderFire: Bool {
+        controller.mood == .danger || controller.mood == .waiting
+    }
+
+    private func shotsDetail(_ stats: ShotStats) -> String? {
+        guard stats.shotsFired > 0 else { return nil }
+        return "\(stats.shotsFired) shots · \(stats.hits) hits"
     }
 
     @ViewBuilder
@@ -256,18 +319,42 @@ struct BattleView: View {
     }
 }
 
+/// How big the two boards can be on a wide screen, and whether they sit side by side or stacked.
+private struct BoardLayout {
+    let side: CGFloat
+    let isStacked: Bool
+
+    init(available size: CGSize) {
+        let header: CGFloat = 28
+        let sideBySide = min((size.width - 36) / 2, size.height - header)
+        let stacked = min(size.width, (size.height - 18) / 2 - header)
+        isStacked = stacked > sideBySide
+        side = max(140, isStacked ? stacked : sideBySide)
+    }
+}
+
 /// A titled board.
 private struct BoardSection<Board: View>: View {
     let title: String
+    var detail: String?
     @ViewBuilder let board: () -> Board
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased())
-                .font(.caption.weight(.bold))
-                .tracking(1.2)
-                .foregroundStyle(.white.opacity(0.6))
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .firstTextBaseline) {
+                Text(title.uppercased())
+                    .font(.system(size: 12, weight: .heavy, design: .rounded))
+                    .tracking(1.6)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
+                if let detail {
+                    Text(detail)
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                }
+            }
             board()
                 .frame(maxWidth: .infinity)
         }

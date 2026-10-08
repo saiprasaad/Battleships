@@ -10,13 +10,19 @@ struct TargetBoard: View {
     let onTap: @MainActor (Coordinate) -> Void
 
     var body: some View {
-        BoardView(rules: perspective.rules) { geometry in
+        BoardView(rules: perspective.rules, highlighted: aimed, accent: isInteractive ? Theme.reticle : nil) { geometry in
+            if let aimed {
+                AimGuides(geometry: geometry, target: aimed)
+                    .transition(.opacity)
+            }
+
             ForEach(perspective.knownEnemyShips, id: \.self) { ship in
                 let rect = geometry.rect(for: ship).insetBy(dx: geometry.cell * 0.1, dy: geometry.cell * 0.1)
                 ShipView(ship: ship, isSunk: perspective.isSunk(ship))
                     .frame(width: rect.width, height: rect.height)
                     .position(x: rect.midX, y: rect.midY)
-                    .transition(.scale.combined(with: .opacity))
+                    .transition(.scale(scale: 1.4).combined(with: .opacity))
+                    .accessibilityHidden(true)
             }
 
             ForEach(perspective.myShots, id: \.target) { move in
@@ -27,8 +33,9 @@ struct TargetBoard: View {
             }
 
             if let aimed {
-                ReticleView(cell: geometry.cell)
+                ReticleView(cell: geometry.cell, target: aimed)
                     .position(geometry.center(of: aimed))
+                    .transition(.scale(scale: 1.6).combined(with: .opacity))
             }
 
             ForEach(effects.filter { $0.board == .target }) { effect in
@@ -49,8 +56,10 @@ struct TargetBoard: View {
                 }
             }
         }
-        .animation(.spring(duration: 0.3), value: aimed)
-        .animation(.easeOut(duration: 0.4), value: perspective.knownEnemyShips)
+        .saturation(isInteractive || perspective.isFinished ? 1 : 0.75)
+        .animation(.spring(duration: 0.3, bounce: 0.2), value: aimed)
+        .animation(.easeOut(duration: 0.5), value: perspective.knownEnemyShips)
+        .animation(.easeInOut(duration: 0.4), value: isInteractive)
     }
 
     private func targetDescription(at coordinate: Coordinate) -> String {
@@ -73,21 +82,34 @@ struct TargetBoard: View {
 struct HomeBoard: View {
     let perspective: BattlePerspective
     let effects: [ImpactEffect]
+    /// The miniature in the battle header has no labels and is a single button, not 100 cells.
+    var isMiniature = false
+    /// The enemy is lining up a shot: a red sweep crosses the water.
+    var isUnderFire = false
 
     var body: some View {
-        BoardView(rules: perspective.rules) { geometry in
+        BoardView(rules: perspective.rules, showsLabels: !isMiniature) { geometry in
             ForEach(perspective.myFleet, id: \.self) { ship in
                 let rect = geometry.rect(for: ship).insetBy(dx: geometry.cell * 0.1, dy: geometry.cell * 0.1)
                 ShipView(ship: ship, isSunk: perspective.isSunk(ship))
                     .frame(width: rect.width, height: rect.height)
                     .position(x: rect.midX, y: rect.midY)
+                    .accessibilityHidden(true)
             }
 
             ForEach(perspective.enemyShots, id: \.target) { move in
                 if let mark = perspective.homeMark(at: move.target) {
-                    CellMarkView(mark: mark, cell: geometry.cell)
+                    CellMarkView(mark: mark, cell: geometry.cell, isMiniature: isMiniature)
                         .position(geometry.center(of: move.target))
                 }
+            }
+
+            if isUnderFire {
+                SonarSweep(tint: Theme.hit, period: 2.4)
+                    .frame(width: geometry.gridSide, height: geometry.gridSide)
+                    .clipShape(RoundedRectangle(cornerRadius: min(14, geometry.cell * 0.35), style: .continuous))
+                    .position(x: geometry.gridRect.midX, y: geometry.gridRect.midY)
+                    .transition(.opacity)
             }
 
             ForEach(effects.filter { $0.board == .home }) { effect in
@@ -95,10 +117,13 @@ struct HomeBoard: View {
                     .position(geometry.center(of: effect.coordinate))
             }
 
-            CellTargets(geometry: geometry, rules: perspective.rules) { coordinate in
-                CellTargets.Description(value: homeDescription(at: coordinate), hint: nil)
-            } onTap: { _ in }
+            if !isMiniature {
+                CellTargets(geometry: geometry, rules: perspective.rules) { coordinate in
+                    CellTargets.Description(value: homeDescription(at: coordinate), hint: nil)
+                } onTap: { _ in }
+            }
         }
+        .animation(.easeInOut(duration: 0.5), value: isUnderFire)
     }
 
     private func homeDescription(at coordinate: Coordinate) -> String {
@@ -159,7 +184,7 @@ struct PlacementBoard: View {
     @State private var drag: Drag?
 
     var body: some View {
-        BoardView(rules: model.rules) { geometry in
+        BoardView(rules: model.rules, accent: Theme.reticle) { geometry in
             if let drag {
                 let rect = geometry.rect(for: drag.candidate).insetBy(dx: 2, dy: 2)
                 RoundedRectangle(cornerRadius: geometry.cell * 0.3, style: .continuous)

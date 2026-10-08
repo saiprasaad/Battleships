@@ -69,28 +69,22 @@ struct StatTile: View {
     }
 }
 
-/// Shows whether live updates are flowing.
+/// Shows whether live updates are flowing, as a single icon.
 struct ConnectionBadge: View {
     let connection: OnlineGamesStore.Connection
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(color)
-                .frame(width: 8, height: 8)
-            Text(label)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Live updates: \(label)")
+        Image(systemName: connection == .offline ? "antenna.radiowaves.left.and.right.slash" : "antenna.radiowaves.left.and.right")
+            .foregroundStyle(color)
+            .symbolEffect(.pulse, options: .repeating, isActive: connection == .connecting)
+            .accessibilityLabel("Live updates: \(label)")
     }
 
     private var label: String {
         switch connection {
-        case .live: "Live"
-        case .connecting: "Connecting…"
-        case .offline: "Offline"
+        case .live: "connected"
+        case .connecting: "connecting"
+        case .offline: "offline"
         }
     }
 
@@ -98,32 +92,7 @@ struct ConnectionBadge: View {
         switch connection {
         case .live: .green
         case .connecting: .orange
-        case .offline: .gray
+        case .offline: .secondary
         }
-    }
-}
-
-/// A row of small hulls: one per ship, dimmed once sunk.
-struct FleetTally: View {
-    let title: String
-    let total: Int
-    let afloat: Int
-    let tint: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-            HStack(spacing: 4) {
-                ForEach(0..<total, id: \.self) { index in
-                    Capsule()
-                        .fill(index < afloat ? tint : Color.white.opacity(0.15))
-                        .frame(width: 16, height: 6)
-                }
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title): \(afloat) of \(total) ships afloat")
     }
 }

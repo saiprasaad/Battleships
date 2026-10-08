@@ -15,7 +15,9 @@ struct BattleControllerTests {
 
         #expect(controller.phase == .battle)
         #expect(controller.isMyTurn)
-        #expect(controller.statusLine == "Your move. Pick a target.")
+        #expect(controller.statusLine == "Pick a target in enemy waters.")
+        #expect(controller.headline == "Your turn")
+        #expect(controller.mood == .ready)
         #expect(!controller.canFire, "nothing aimed yet")
 
         let target = Coordinate("C3")!
@@ -66,6 +68,20 @@ struct BattleControllerTests {
         #expect(app.solo.match(match.id)?.battle.moves.first?.target == Coordinate("E5"))
     }
 
+    @Test func countsHitsSoTheScreenCanReact() async throws {
+        let (app, _) = makeTestApp()
+        let match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
+        let controller = BattleController(route: .solo(match.id), app: app)
+        await controller.load()
+
+        let enemyBoat = try #require(match.battle.fleet(of: ComputerMatch.computer).first)
+        controller.tapTarget(enemyBoat.origin)
+        await controller.fire()
+        #expect(controller.hitsLanded == 1)
+        let computerHits = app.solo.match(match.id)?.perspective.enemyStats.hits ?? -1
+        #expect(controller.hitsTaken == computerHits)
+    }
+
     @Test func resigningEndsTheBattle() async throws {
         let (app, feedback) = makeTestApp()
         let match = try app.solo.start(mode: .classic, difficulty: .hard, fleet: Rules.classic.randomFleet())
@@ -75,6 +91,8 @@ struct BattleControllerTests {
         await controller.resign()
         #expect(controller.phase == .finished)
         #expect(controller.statusLine == "You resigned.")
+        #expect(controller.headline == "Defeat")
+        #expect(controller.mood == .defeat)
         #expect(controller.perspective?.didWin == false)
         #expect(app.solo.record.losses[.hard] == 1)
         #expect(feedback.events.contains(.defeat))

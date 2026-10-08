@@ -1,55 +1,7 @@
 import BattleshipCore
 import SwiftUI
 
-/// Whose turn it is and how both fleets are holding up.
-struct BattleHeader: View {
-    let perspective: BattlePerspective
-    let statusLine: String
-    let isMyTurn: Bool
-    let isWaiting: Bool
-
-    var body: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "circle.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(indicatorColor)
-                    .symbolEffect(.pulse, options: .repeating, isActive: isWaiting)
-                Text(statusLine)
-                    .font(.headline)
-                    .multilineTextAlignment(.leading)
-                Spacer(minLength: 0)
-            }
-            HStack(alignment: .bottom) {
-                FleetTally(
-                    title: "Your fleet",
-                    total: perspective.myFleet.count,
-                    afloat: perspective.myShipsRemaining,
-                    tint: Theme.hull
-                )
-                Spacer()
-                FleetTally(
-                    title: "Enemy fleet",
-                    total: perspective.rules.fleet.count,
-                    afloat: perspective.enemyShipsRemaining,
-                    tint: Theme.hit
-                )
-            }
-        }
-        .padding()
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .accessibilityElement(children: .contain)
-    }
-
-    private var indicatorColor: Color {
-        if perspective.isFinished {
-            return perspective.didWin == true ? Theme.victory : Theme.hit
-        }
-        return isMyTurn ? Theme.victory : .orange
-    }
-}
-
-/// The aim readout and the Fire button.
+/// The target readout and the Fire button.
 struct FireBar: View {
     let aimed: Coordinate?
     let isMyTurn: Bool
@@ -59,39 +11,54 @@ struct FireBar: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(isMyTurn ? "TARGET" : "STAND BY")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .tracking(1.6)
+                    .foregroundStyle(.secondary)
+                Text(readout)
+                    .font(.display(28, weight: .black).monospacedDigit())
+                    .foregroundStyle(target == nil ? Color.white.opacity(0.25) : Theme.reticle)
+                    .glow(target == nil ? .clear : Theme.reticle, radius: 10)
                     .contentTransition(.numericText())
                 Text(subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
-            .animation(.snappy, value: aimed)
+            .animation(.snappy, value: target)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(target.map { "Target \($0.notation)" } ?? (isMyTurn ? "No target" : "Stand by"))
+            .accessibilityHint(subtitle)
+
             Spacer(minLength: 8)
+
             Button { onFire() } label: {
                 if isSubmitting {
                     ProgressView()
                         .tint(.white)
-                        .frame(minWidth: 60)
+                        .frame(minWidth: 82)
                 } else {
-                    Label("Fire", systemImage: "flame.fill")
+                    Label("FIRE", systemImage: "flame.fill")
                 }
             }
-            .buttonStyle(FireButtonStyle())
+            .buttonStyle(FireButtonStyle(isArmed: canFire))
             .disabled(!canFire)
+            .accessibilityLabel("Fire")
             .accessibilityHint(aimed.map { "Fires at \($0.notation)." } ?? "Aim at a square in enemy waters first.")
         }
-        .padding(14)
-        .floatingSurface()
+        .padding(.vertical, 12)
+        .padding(.horizontal, 18)
+        .hudPanel(cornerRadius: 28)
         .padding(.horizontal)
         .padding(.bottom, 6)
-        .environment(\.colorScheme, .dark)
     }
 
-    private var title: String {
-        guard isMyTurn else { return "Stand by" }
-        return aimed.map { "Target \($0.notation)" } ?? "Choose a target"
+    private var target: Coordinate? { isMyTurn ? aimed : nil }
+
+    private var readout: String {
+        target?.notation ?? "– –"
     }
 
     private var subtitle: String {
@@ -110,9 +77,10 @@ struct ResultBar: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(didWin ? "Victory" : "Defeat")
-                    .font(.headline)
-                    .foregroundStyle(didWin ? Theme.victory : Theme.hit)
+                Text(didWin ? "VICTORY" : "DEFEAT")
+                    .font(.display(20, weight: .black))
+                    .foregroundStyle(didWin ? AnyShapeStyle(Theme.goldLeaf) : AnyShapeStyle(Theme.hit))
+                    .glow(didWin ? Theme.gold : Theme.hit, radius: 8)
                 Text("\(stats.hits) hits from \(stats.shotsFired) shots")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -120,14 +88,15 @@ struct ResultBar: View {
             Spacer(minLength: 8)
             Button("Summary") { onSummary() }
                 .buttonStyle(.bordered)
+                .tint(.white)
             Button("Rematch") { onRematch() }
                 .primaryActionStyle()
+                .tint(didWin ? Theme.amber : Theme.hit)
         }
         .padding(14)
-        .floatingSurface()
+        .hudPanel(cornerRadius: 28)
         .padding(.horizontal)
         .padding(.bottom, 6)
-        .environment(\.colorScheme, .dark)
     }
 }
 
@@ -136,18 +105,28 @@ struct AnnouncementBanner: View {
     let announcement: BattleController.Announcement
 
     var body: some View {
-        Label {
+        let tint = announcement.isGoodNews ? Theme.victory : Theme.hit
+        HStack(spacing: 10) {
+            Image(systemName: announcement.isGoodNews ? "scope" : "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(tint.gradient))
             Text(announcement.message)
-                .foregroundStyle(.primary)
-        } icon: {
-            Image(systemName: announcement.isGoodNews ? "checkmark.seal.fill" : "exclamationmark.octagon.fill")
-                .foregroundStyle(announcement.isGoodNews ? Theme.victory : Theme.hit)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.leading)
         }
-        .font(.subheadline.weight(.semibold))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
-        .floatingSurface(cornerRadius: 20)
-        .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
+        .padding(.leading, 8)
+        .padding(.trailing, 18)
+        .padding(.vertical, 8)
+        .background {
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay(Capsule().fill(Color.black.opacity(0.35)))
+        }
+        .overlay(Capsule().strokeBorder(tint.opacity(0.7), lineWidth: 1))
+        .shadow(color: tint.opacity(0.45), radius: 16)
         .accessibilityHidden(true) // Announced to VoiceOver directly.
     }
 }
@@ -161,7 +140,8 @@ struct ClaimVictoryCard: View {
         HStack(spacing: 14) {
             Image(systemName: "hourglass.bottomhalf.filled")
                 .font(.title2)
-                .foregroundStyle(.orange)
+                .foregroundStyle(Theme.amber)
+                .glow(Theme.amber, radius: 8)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(opponentName) is out of time")
@@ -173,10 +153,14 @@ struct ClaimVictoryCard: View {
             Spacer(minLength: 8)
             Button("Claim Victory") { onClaim() }
                 .primaryActionStyle()
-                .tint(.orange)
+                .tint(Theme.amber)
         }
         .padding(14)
-        .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .hudPanel(cornerRadius: 20)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Theme.amber.opacity(0.5), lineWidth: 1)
+        )
         .accessibilityElement(children: .combine)
     }
 }
@@ -191,8 +175,18 @@ struct ChallengeCard: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            OpponentAvatar(name: opponentName, size: 76)
+            ZStack {
+                SonarPing(tint: Theme.amber)
+                    .frame(width: 170, height: 170)
+                OpponentAvatar(name: opponentName, size: 84)
+                    .glow(Theme.amber, radius: 12)
+            }
+            .frame(height: 150)
             VStack(spacing: 6) {
+                Text("INCOMING CHALLENGE")
+                    .font(.system(size: 12, weight: .heavy, design: .rounded))
+                    .tracking(2)
+                    .foregroundStyle(Theme.amber)
                 Text("\(opponentName) challenges you!")
                     .font(.title2.weight(.bold))
                     .multilineTextAlignment(.center)
@@ -216,12 +210,13 @@ struct ChallengeCard: View {
                     .buttonStyle(.bordered)
                 Button("Accept & Deploy") { onAccept() }
                     .primaryActionStyle()
+                    .tint(Theme.hit)
             }
             .controlSize(.large)
         }
         .padding(28)
         .frame(maxWidth: 440)
-        .floatingSurface(cornerRadius: 28)
+        .hudPanel(cornerRadius: 30)
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -236,12 +231,23 @@ struct WaitingCard: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Image(systemName: isMatchmaking ? "dot.radiowaves.left.and.right" : "paperplane.fill")
-                .font(.system(size: 52))
-                .foregroundStyle(Theme.reticle)
-                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: isMatchmaking)
+            Group {
+                if isMatchmaking {
+                    RadarScope()
+                } else {
+                    ZStack {
+                        SonarPing()
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 46))
+                            .foregroundStyle(Theme.reticle)
+                            .glow(Theme.reticle, radius: 10)
+                    }
+                }
+            }
+            .frame(width: 170, height: 170)
             Text(isMatchmaking ? "Searching for an Opponent" : "Challenge Sent")
                 .font(.title2.weight(.bold))
+                .multilineTextAlignment(.center)
             Text(message)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -251,7 +257,7 @@ struct WaitingCard: View {
         }
         .padding(28)
         .frame(maxWidth: 440)
-        .floatingSurface(cornerRadius: 28)
+        .hudPanel(cornerRadius: 30)
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -262,128 +268,5 @@ struct WaitingCard: View {
             return "You'll be paired with the next captain looking for a\(rules) battle. We'll notify you when the fight is on."
         }
         return "Waiting for \(opponentName) to accept. We'll notify you when they do."
-    }
-}
-
-/// The end-of-battle card.
-struct GameOverOverlay: View {
-    let didWin: Bool
-    let reason: Outcome.Reason?
-    let opponentName: String
-    let stats: ShotStats
-    let celebrates: Bool
-    let onRematch: @MainActor () -> Void
-    let onClose: @MainActor () -> Void
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.55)
-                .ignoresSafeArea()
-                .onTapGesture { onClose() }
-                .accessibilityHidden(true)
-
-            if celebrates {
-                ConfettiView()
-            }
-
-            VStack(spacing: 18) {
-                Image(systemName: didWin ? "trophy.fill" : "water.waves")
-                    .font(.system(size: 60))
-                    .foregroundStyle(didWin ? Color.yellow : Theme.reticle)
-                    .symbolEffect(.bounce, value: didWin)
-                Text(didWin ? "Victory!" : "Defeat")
-                    .font(.largeTitle.weight(.heavy))
-                Text(subtitle)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-                HStack {
-                    StatTile(title: "Shots", value: "\(stats.shotsFired)")
-                    StatTile(title: "Hits", value: "\(stats.hits)")
-                    StatTile(title: "Accuracy", value: stats.accuracy.map { $0.formatted(.percent.precision(.fractionLength(0))) } ?? "—")
-                }
-                .padding(.vertical, 6)
-                VStack(spacing: 10) {
-                    Button { onRematch() } label: {
-                        Label("Rematch", systemImage: "arrow.counterclockwise")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .primaryActionStyle()
-                    Button("View the Board") { onClose() }
-                        .buttonStyle(.bordered)
-                }
-                .controlSize(.large)
-            }
-            .padding(28)
-            .frame(maxWidth: 380)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-            .padding()
-            .environment(\.colorScheme, .dark)
-            .accessibilityElement(children: .contain)
-            .accessibilityAddTraits(.isModal)
-        }
-    }
-
-    private var subtitle: String {
-        switch (didWin, reason) {
-        case (true, .resignation): "\(opponentName) struck their colours."
-        case (true, .timeout): "\(opponentName) ran out of time to move."
-        case (true, _): "You sent the enemy fleet to the bottom."
-        case (false, .resignation): "You resigned. There's always the next battle."
-        case (false, .timeout): "You ran out of time to make your move."
-        case (false, _): "\(opponentName) sank your entire fleet."
-        }
-    }
-}
-
-/// Falling paper, for victories.
-struct ConfettiView: View {
-    private struct Piece {
-        let x: CGFloat
-        let delay: Double
-        let speed: Double
-        let sway: Double
-        let spin: Double
-        let size: CGFloat
-        let color: Color
-    }
-
-    @State private var start = Date()
-    @State private var pieces = ConfettiView.makePieces()
-
-    private nonisolated static func makePieces() -> [Piece] {
-        (0..<90).map { _ in
-            Piece(
-                x: .random(in: 0...1),
-                delay: .random(in: 0...1.2),
-                speed: .random(in: 0.18...0.32),
-                sway: .random(in: 1.5...3.5),
-                spin: .random(in: 2...7),
-                size: .random(in: 7...13),
-                color: [Color.yellow, .orange, .pink, Theme.reticle, Theme.victory, .white].randomElement()!
-            )
-        }
-    }
-
-    var body: some View {
-        TimelineView(.animation) { timeline in
-            Canvas { context, size in
-                let elapsed = timeline.date.timeIntervalSince(start)
-                for piece in pieces {
-                    let age = elapsed - piece.delay
-                    guard age > 0 else { continue }
-                    let y = -20 + age * piece.speed * size.height
-                    guard y < size.height + 20 else { continue }
-                    let x = piece.x * size.width + sin(age * piece.sway) * 24
-                    var copy = context
-                    copy.translateBy(x: x, y: y)
-                    copy.rotate(by: .radians(age * piece.spin))
-                    let rect = CGRect(x: -piece.size / 2, y: -piece.size / 4, width: piece.size, height: piece.size / 2)
-                    copy.fill(Path(rect), with: .color(piece.color))
-                }
-            }
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 }

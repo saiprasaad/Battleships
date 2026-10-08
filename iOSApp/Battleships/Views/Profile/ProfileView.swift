@@ -22,7 +22,8 @@ struct ProfileView: View {
                     Section {
                         ProfileHeader(account: account)
                     }
-                    Section("Online Record") {
+                    .listRowBackground(Color.clear)
+                    Section {
                         HStack {
                             StatTile(title: "Rating", value: "\(account.stats.rating)")
                             StatTile(title: "Wins", value: "\(account.stats.wins)")
@@ -33,11 +34,15 @@ struct ProfileView: View {
                             )
                         }
                         .padding(.vertical, 6)
+                    } header: {
+                        SheetSectionHeader(title: "Online Record")
                     }
+                    .listRowBackground(Theme.rowBackground)
                 } else if app.isSignedIn {
                     Section {
                         ProgressView()
                     }
+                    .listRowBackground(Theme.rowBackground)
                 } else {
                     Section {
                         VStack(alignment: .leading, spacing: 10) {
@@ -51,18 +56,22 @@ struct ProfileView: View {
                         }
                         .padding(.vertical, 6)
                     }
+                    .listRowBackground(Theme.rowBackground)
                 }
 
-                Section("Against the Computer") {
+                Section {
                     ForEach(Difficulty.allCases) { difficulty in
                         LabeledContent(difficulty.displayName) {
                             Text("\(app.solo.record.wins[difficulty] ?? 0)W · \(app.solo.record.losses[difficulty] ?? 0)L")
                                 .monospacedDigit()
                         }
                     }
+                } header: {
+                    SheetSectionHeader(title: "Against the Computer")
                 }
+                .listRowBackground(Theme.rowBackground)
 
-                Section("Settings") {
+                Section {
                     Toggle(isOn: Bindable(app.settings).hapticsEnabled) {
                         Label("Haptics", systemImage: "iphone.radiowaves.left.and.right")
                     }
@@ -76,12 +85,16 @@ struct ProfileView: View {
                             Label("Server", systemImage: "server.rack")
                         }
                     }
+                } header: {
+                    SheetSectionHeader(title: "Settings")
                 }
+                .listRowBackground(Theme.rowBackground)
 
                 if app.isSignedIn {
                     Section {
                         Button("Sign Out") { confirmsSignOut = true }
                     }
+                    .listRowBackground(Theme.rowBackground)
                     Section {
                         Button(role: .destructive) {
                             confirmsDeletion = true
@@ -96,6 +109,7 @@ struct ProfileView: View {
                     } footer: {
                         Text("Deleting your account removes your profile and rating. Battles in progress are resigned.")
                     }
+                    .listRowBackground(Theme.rowBackground)
                 }
 
                 Section {
@@ -106,7 +120,10 @@ struct ProfileView: View {
                     }
                     LabeledContent("Version", value: Self.version)
                 }
+                .listRowBackground(Theme.rowBackground)
             }
+            .scrollContentBackground(.hidden)
+            .background { OceanBackdrop() }
             .navigationTitle("Profile")
             .refreshable { await app.session.refreshAccount() }
             .task { notificationStatus = await PushPermission.status() }
@@ -156,6 +173,7 @@ struct ProfileView: View {
             } label: {
                 LabeledContent {
                     Text("Turn On")
+                        .foregroundStyle(.tint)
                 } label: {
                     Label("Notifications", systemImage: "bell")
                 }
@@ -196,17 +214,35 @@ private struct ProfileHeader: View {
     let account: Account
 
     var body: some View {
-        HStack(spacing: 16) {
-            OpponentAvatar(name: account.username, size: 64)
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(spacing: 12) {
+            ZStack {
+                SonarPing(tint: Theme.reticle)
+                    .frame(width: 130, height: 130)
+                OpponentAvatar(name: account.username, size: 84)
+                    .overlay(Circle().strokeBorder(Theme.reticle.opacity(0.8), lineWidth: 2).padding(-4))
+                    .glow(Theme.reticle, radius: 10)
+            }
+            .frame(height: 112)
+            VStack(spacing: 4) {
                 Text(account.username)
-                    .font(.title2.weight(.bold))
+                    .font(.display(24, weight: .black))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 Text("Captain since \(account.createdAt.formatted(.dateTime.month(.wide).year()))")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
+            Label("\(account.stats.rating)", systemImage: "star.fill")
+                .font(.headline.monospacedDigit())
+                .foregroundStyle(Theme.gold)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Theme.gold.opacity(0.14), in: Capsule())
+                .overlay(Capsule().strokeBorder(Theme.gold.opacity(0.4), lineWidth: 1))
+                .accessibilityLabel("Rating \(account.stats.rating)")
         }
-        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
         .accessibilityElement(children: .combine)
     }
 }
@@ -229,10 +265,11 @@ struct ServerSettingsView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             } header: {
-                Text("Server address")
+                SheetSectionHeader(title: "Server address")
             } footer: {
                 Text("Accounts belong to a server, so switching signs you out. Games against the computer are kept.")
             }
+            .listRowBackground(Theme.rowBackground)
 
             Section {
                 Button("Test Connection") { testConnection() }
@@ -244,6 +281,7 @@ struct ServerSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .listRowBackground(Theme.rowBackground)
 
             if app.settings.serverURL != app.settings.defaultServerURL {
                 Section {
@@ -251,8 +289,11 @@ struct ServerSettingsView: View {
                         address = app.settings.defaultServerURL.absoluteString
                     }
                 }
+                .listRowBackground(Theme.rowBackground)
             }
         }
+        .scrollContentBackground(.hidden)
+        .background { OceanBackdrop() }
         .navigationTitle("Server")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

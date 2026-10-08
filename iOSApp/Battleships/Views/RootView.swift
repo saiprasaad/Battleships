@@ -23,6 +23,10 @@ struct RootView: View {
                 .tabItem { Label("Profile", systemImage: "person.crop.circle") }
                 .tag(Tab.profile)
         }
+        .preferredColorScheme(.dark)
+        .fullScreenCover(isPresented: showsWelcome) {
+            WelcomeView { app.settings.hasSeenWelcome = true }
+        }
         .alert("You've Been Signed Out", isPresented: Bindable(app).showsSessionExpired) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -38,6 +42,13 @@ struct RootView: View {
                 selection = .battles
             }
         }
+    }
+
+    private var showsWelcome: Binding<Bool> {
+        Binding(
+            get: { !app.settings.hasSeenWelcome },
+            set: { if !$0 { app.settings.hasSeenWelcome = true } }
+        )
     }
 
     /// Online games waiting on the player: their move, or a challenge to answer.

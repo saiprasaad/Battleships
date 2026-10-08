@@ -104,8 +104,21 @@ struct LobbyTests {
         #expect(LobbyEntry.online(makeSummary(status: .matchmaking, opponent: nil)).status == "Looking for an opponent…")
         #expect(LobbyEntry.online(makeSummary(status: .invited, you: .two)).status == "Challenged you")
         #expect(LobbyEntry.online(makeSummary(status: .active, turn: .one)).status == "Your move · 5 vs 5 ships")
+        #expect(LobbyEntry.online(makeSummary(status: .active, turn: .two)).status == "Their move · 5 vs 5 ships")
         #expect(LobbyEntry.online(makeSummary(status: .finished, you: .two, outcome: Outcome(winner: .two, reason: .resignation))).status
             == "Won · opponent resigned")
+    }
+
+    @Test func lobbyCountsDownTheLastDayToMove() {
+        let now = Date()
+        let relaxed = makeSummary(status: .active, turn: .one, turnDeadline: now.addingTimeInterval(50 * 3600))
+        #expect(LobbyEntry.online(relaxed).status(at: now) == "Your move · 5 vs 5 ships")
+        let urgent = makeSummary(status: .active, turn: .one, turnDeadline: now.addingTimeInterval(5 * 3600 + 120))
+        #expect(LobbyEntry.online(urgent).status(at: now) == "Your move · 5h left")
+        let lastMinutes = makeSummary(status: .active, turn: .one, turnDeadline: now.addingTimeInterval(40 * 60 + 5))
+        #expect(LobbyEntry.online(lastMinutes).status(at: now) == "Your move · 40m left")
+        let theirsExpired = makeSummary(status: .active, turn: .two, turnDeadline: now.addingTimeInterval(-60))
+        #expect(LobbyEntry.online(theirsExpired).status(at: now) == "Time's up · claim the win")
     }
 
     @Test func showsOnlyRecentFinishedGames() {
@@ -213,6 +226,15 @@ struct SettingsAndLayoutTests {
     @Test(arguments: ["", "battleships.example.com", "ftp://example.com", "http://", "not a url"])
     func rejectsBadServerAddresses(input: String) {
         #expect(AppSettings.validatedServerURL(input) == nil)
+    }
+
+    @MainActor
+    @Test func remembersTheWelcomeScreen() throws {
+        let defaults = try #require(UserDefaults(suiteName: "WelcomeTest-\(UUID().uuidString)"))
+        let settings = AppSettings(defaults: defaults)
+        #expect(!settings.hasSeenWelcome)
+        settings.hasSeenWelcome = true
+        #expect(AppSettings(defaults: defaults).hasSeenWelcome)
     }
 
     @Test func boardGeometryMapsPointsToCells() {

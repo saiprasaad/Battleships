@@ -22,9 +22,13 @@ struct ScreenshotTests {
         let app = showcase.app
 
         try await capture(RootView().environment(app), "01-lobby", to: output)
-        try await capture(RootView().environment(app), "02-lobby-dark", to: output, style: .dark)
+        try await capture(AuthSheet().environment(app), "02-sign-in", to: output)
+        let aiming = BattleController(route: .solo(showcase.classicBattle), app: app)
+        let perspective = try #require(aiming.perspective)
+        let target = try #require(["F7", "G6", "E4", "H8"].compactMap { Coordinate($0) }.first { perspective.canTarget($0) })
+        aiming.tapTarget(target)
         try await capture(
-            NavigationStack { BattleView(route: .solo(showcase.classicBattle), app: app) }.environment(app),
+            NavigationStack { BattleView(controller: aiming) }.environment(app),
             "03-battle-vs-computer", to: output
         )
         try await capture(
@@ -38,7 +42,7 @@ struct ScreenshotTests {
         )
         try await capture(
             ZStack {
-                Theme.battleBackdrop.ignoresSafeArea()
+                OceanBackdrop()
                 GameOverOverlay(
                     didWin: true,
                     reason: .fleetDestroyed,
@@ -62,13 +66,33 @@ struct ScreenshotTests {
             size: CGSize(width: 1180, height: 820),
             regularWidth: true
         )
+        try await capture(WelcomeView {}, "11-welcome", to: output)
+        try await capture(
+            ZStack {
+                OceanBackdrop()
+                GameOverOverlay(
+                    didWin: false,
+                    reason: .fleetDestroyed,
+                    opponentName: "Computer (Admiral)",
+                    stats: ShotStats(shotsFired: 52, hits: 14),
+                    celebrates: false,
+                    onRematch: {},
+                    onClose: {}
+                )
+            },
+            "12-defeat", to: output
+        )
+        try await capture(
+            FleetSheet(controller: BattleController(route: .solo(showcase.classicBattle), app: app)).environment(app),
+            "13-your-fleet", to: output
+        )
     }
 
     private func capture(
         _ view: some View,
         _ name: String,
         to directory: URL,
-        style: UIUserInterfaceStyle = .light,
+        style: UIUserInterfaceStyle = .dark,
         size: CGSize? = nil,
         regularWidth: Bool = false
     ) async throws {
@@ -113,6 +137,7 @@ struct Showcase {
             stats: PlayerStats(rating: 1184, wins: 23, losses: 9)
         )
         defaults.set(try APICoding.makeEncoder().encode(account), forKey: "cachedAccount")
+        defaults.set(true, forKey: "hasSeenWelcome")
         app = AppModel(
             settings: AppSettings(defaults: defaults),
             tokenStorage: InMemoryTokenStorage(token: "showcase"),

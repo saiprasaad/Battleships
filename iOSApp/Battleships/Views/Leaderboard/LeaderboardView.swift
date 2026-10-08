@@ -38,12 +38,21 @@ struct LeaderboardView: View {
                         Text("Finish an online battle to get on the board.")
                     }
                 } else {
-                    List(entries) { entry in
-                        LeaderboardRow(entry: entry, isYou: entry.player.id == app.session.account?.id)
+                    List {
+                        if entries.count >= 3 {
+                            Podium(entries: Array(entries.prefix(3)), yourID: app.session.account?.id)
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                        }
+                        ForEach(entries.count >= 3 ? Array(entries.dropFirst(3)) : entries) { entry in
+                            LeaderboardRow(entry: entry, isYou: entry.player.id == app.session.account?.id)
+                        }
                     }
                     .listStyle(.plain)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background { OceanBackdrop() }
             .navigationTitle("Leaderboard")
             .refreshable { await load() }
             .task(id: app.session.account?.id) { await load() }
@@ -89,7 +98,7 @@ private struct LeaderboardRow: View {
                 .font(.title3.weight(.semibold).monospacedDigit())
         }
         .padding(.vertical, 4)
-        .listRowBackground(isYou ? Color.accentColor.opacity(0.12) : nil)
+        .listRowBackground(isYou ? Theme.reticle.opacity(0.14) : Color.clear)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Rank \(entry.rank), \(entry.player.username)\(isYou ? ", you" : ""), rating \(entry.player.rating), \(entry.wins) wins, \(entry.losses) losses")
     }
@@ -111,5 +120,61 @@ private struct LeaderboardRow: View {
         Image(systemName: "medal.fill")
             .font(.title2)
             .foregroundStyle(color)
+    }
+}
+
+/// The top three captains, on the winners' steps.
+private struct Podium: View {
+    let entries: [LeaderboardEntry]
+    let yourID: UUID?
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            step(entries[1], height: 74, color: Color(white: 0.8))
+            step(entries[0], height: 104, color: Theme.gold)
+            step(entries[2], height: 56, color: Color(red: 0.86, green: 0.55, blue: 0.32))
+        }
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func step(_ entry: LeaderboardEntry, height: CGFloat, color: Color) -> some View {
+        let isYou = entry.player.id == yourID
+        return VStack(spacing: 6) {
+            if entry.rank == 1 {
+                Image(systemName: "crown.fill")
+                    .font(.title3)
+                    .foregroundStyle(Theme.goldLeaf)
+                    .glow(Theme.gold, radius: 8)
+                    .accessibilityHidden(true)
+            }
+            OpponentAvatar(name: entry.player.username, size: entry.rank == 1 ? 64 : 52)
+                .overlay(Circle().strokeBorder(color, lineWidth: 2.5).padding(-4))
+                .glow(color, radius: 8)
+            Text(isYou ? "You" : entry.player.username)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text("\(entry.player.rating)")
+                .font(.caption.weight(.bold).monospacedDigit())
+                .foregroundStyle(color)
+            ZStack(alignment: .top) {
+                UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12, style: .continuous)
+                    .fill(LinearGradient(colors: [color.opacity(0.55), color.opacity(0.08)], startPoint: .top, endPoint: .bottom))
+                    .overlay(
+                        UnevenRoundedRectangle(topLeadingRadius: 12, topTrailingRadius: 12, style: .continuous)
+                            .stroke(color.opacity(0.5), lineWidth: 1)
+                    )
+                Text("\(entry.rank)")
+                    .font(.display(26, weight: .black))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.top, 8)
+            }
+            .frame(height: height)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Rank \(entry.rank), \(entry.player.username)\(isYou ? ", you" : ""), rating \(entry.player.rating)")
     }
 }

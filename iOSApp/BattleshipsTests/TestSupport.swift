@@ -33,6 +33,7 @@ func makeSummary(
     turn: Player? = nil,
     outcome: Outcome? = nil,
     updatedAt: Date = Date(),
+    turnDeadline: Date? = nil,
     opponent: String? = "rival"
 ) -> GameSummary {
     GameSummary(
@@ -46,6 +47,7 @@ func makeSummary(
         yourShipsRemaining: 5,
         opponentShipsRemaining: 5,
         createdAt: updatedAt,
-        updatedAt: updatedAt
+        updatedAt: updatedAt,
+        turnDeadline: turnDeadline
     )
 }

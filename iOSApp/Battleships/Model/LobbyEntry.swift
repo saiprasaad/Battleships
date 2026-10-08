@@ -83,7 +83,9 @@ enum LobbyEntry: Identifiable, Hashable, Sendable {
     }
 
     /// A one-line description of where the game stands.
-    var status: String {
+    var status: String { status(at: Date()) }
+
+    func status(at now: Date) -> String {
         switch self {
         case let .online(game):
             switch game.status {
@@ -92,10 +94,13 @@ enum LobbyEntry: Identifiable, Hashable, Sendable {
             case .invited:
                 return game.isIncomingChallenge ? "Challenged you" : "Waiting for them to accept"
             case .active:
-                let fleet = "\(game.yourShipsRemaining) vs \(game.opponentShipsRemaining) ships"
-                if game.canClaimVictory() {
-                    return "Their time is up · claim the win"
+                if game.canClaimVictory(at: now) {
+                    return "Time's up · claim the win"
                 }
+                if game.isYourTurn, let deadline = game.turnDeadline, deadline.timeIntervalSince(now) < Self.urgentTimeLeft {
+                    return "Your move · \(Self.timeLeft(until: deadline, from: now)) left"
+                }
+                let fleet = "\(game.yourShipsRemaining) vs \(game.opponentShipsRemaining) ships"
                 return game.isYourTurn ? "Your move · \(fleet)" : "Their move · \(fleet)"
             case .finished:
                 return Self.result(didWin: game.didWin == true, reason: game.outcome?.reason)
@@ -114,6 +119,15 @@ enum LobbyEntry: Identifiable, Hashable, Sendable {
         case let .online(game): game.didWin
         case let .solo(match): match.perspective.didWin
         }
+    }
+
+    /// Under a day left to move, the lobby counts down instead of showing the score.
+    static let urgentTimeLeft: TimeInterval = 24 * 60 * 60
+
+    /// "5h" or "40m".
+    static func timeLeft(until deadline: Date, from now: Date) -> String {
+        let minutes = max(1, Int(deadline.timeIntervalSince(now) / 60))
+        return minutes >= 60 ? "\(minutes / 60)h" : "\(minutes)m"
     }
 
     private static func result(didWin: Bool, reason: Outcome.Reason?) -> String {

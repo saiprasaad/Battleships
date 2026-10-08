@@ -44,6 +44,31 @@ struct AuthForm: View {
     var body: some View {
         Form {
             Section {
+                VStack(spacing: 10) {
+                    ZStack {
+                        SonarPing()
+                            .frame(width: 130, height: 130)
+                        Image(systemName: "scope")
+                            .font(.system(size: 44, weight: .light))
+                            .foregroundStyle(Theme.reticle)
+                            .glow(Theme.reticle, radius: 10)
+                    }
+                    .frame(height: 104)
+                    Text(mode == .signIn ? "Welcome back, Captain" : "Join the fleet")
+                        .font(.display(22, weight: .heavy))
+                        .multilineTextAlignment(.center)
+                        .contentTransition(.opacity)
+                    Text("An account lets you battle other players and earn a rating.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .accessibilityElement(children: .combine)
+            }
+            .listRowBackground(Color.clear)
+
+            Section {
                 Picker("Mode", selection: $mode) {
                     ForEach(Mode.allCases) { mode in
                         Text(mode.rawValue).tag(mode)
@@ -72,12 +97,14 @@ struct AuthForm: View {
                     Text("Usernames are 3–20 letters, numbers or underscores. Passwords need at least 8 characters.")
                 }
             }
+            .listRowBackground(Theme.rowBackground)
 
             if let problem = validationProblem ?? errorMessage {
                 Section {
                     Label(problem, systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.red)
                 }
+                .listRowBackground(Theme.rowBackground)
             }
 
             Section {
@@ -97,7 +124,10 @@ struct AuthForm: View {
             } footer: {
                 Text("Server: \(app.settings.serverURL.host() ?? app.settings.serverURL.absoluteString)")
             }
+            .listRowBackground(Theme.rowBackground)
         }
+        .scrollContentBackground(.hidden)
+        .background { OceanBackdrop() }
         .onChange(of: mode) { errorMessage = nil }
         .onAppear { focus = .username }
     }

@@ -9,6 +9,7 @@ final class AppSettings {
         static let serverURL = "serverURL"
         static let haptics = "hapticsEnabled"
         static let askedForNotifications = "askedForNotifications"
+        static let seenWelcome = "hasSeenWelcome"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -30,6 +31,11 @@ final class AppSettings {
         didSet { defaults.set(hasAskedForNotifications, forKey: Keys.askedForNotifications) }
     }
 
+    /// Whether the player has been through the welcome screen shown on first launch.
+    var hasSeenWelcome: Bool {
+        didSet { defaults.set(hasSeenWelcome, forKey: Keys.seenWelcome) }
+    }
+
     init(defaults: UserDefaults = .standard, bundle: Bundle = .main) {
         self.defaults = defaults
         let configured = (bundle.object(forInfoDictionaryKey: "BattleshipsAPIBaseURL") as? String)
@@ -38,6 +44,7 @@ final class AppSettings {
         serverURL = defaults.string(forKey: Keys.serverURL).flatMap(Self.validatedServerURL) ?? defaultServerURL
         hapticsEnabled = defaults.object(forKey: Keys.haptics) as? Bool ?? true
         hasAskedForNotifications = defaults.bool(forKey: Keys.askedForNotifications)
+        hasSeenWelcome = defaults.bool(forKey: Keys.seenWelcome)
     }
 
     /// Parses a server address typed by the user. Accepts `http` and `https` URLs with a host.

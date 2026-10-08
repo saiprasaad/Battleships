@@ -17,6 +17,15 @@ enum OpponentChoice: String, CaseIterable, Identifiable, Hashable, Sendable {
         }
     }
 
+    /// For the opponent cards, where space is tight.
+    var shortTitle: String {
+        switch self {
+        case .computer: "Computer"
+        case .randomPlayer: "Random"
+        case .friend: "Friend"
+        }
+    }
+
     var subtitle: String {
         switch self {
         case .computer: "Play offline, right now"

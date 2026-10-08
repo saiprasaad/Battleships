@@ -22,8 +22,9 @@ struct HowToPlayView: View {
                     Text("Online, each move has a time limit (three days on the standard server). If your opponent lets it run out, you can claim the win.")
                 }
             }
+            .listRowBackground(Theme.rowBackground)
 
-            Section("Rules") {
+            Section {
                 ForEach(GameMode.allCases) { mode in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(mode.displayName)
@@ -34,9 +35,12 @@ struct HowToPlayView: View {
                     }
                     .padding(.vertical, 2)
                 }
+            } header: {
+                SheetSectionHeader(title: "Rules")
             }
+            .listRowBackground(Theme.rowBackground)
 
-            Section("The Computer") {
+            Section {
                 ForEach(Difficulty.allCases) { difficulty in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(difficulty.displayName)
@@ -47,8 +51,13 @@ struct HowToPlayView: View {
                     }
                     .padding(.vertical, 2)
                 }
+            } header: {
+                SheetSectionHeader(title: "The Computer")
             }
+            .listRowBackground(Theme.rowBackground)
         }
+        .scrollContentBackground(.hidden)
+        .background { OceanBackdrop() }
         .navigationTitle("How to Play")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -63,7 +72,7 @@ private struct Rule<Detail: View>: View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: icon)
                 .font(.title3)
-                .foregroundStyle(.tint)
+                .foregroundStyle(Theme.reticle)
                 .frame(width: 30)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
