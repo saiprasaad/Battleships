@@ -2,6 +2,7 @@
 import BattleshipAPI
 import BattleshipCore
 import Foundation
+import Observation
 import SwiftUI
 import Testing
 import UIKit
@@ -102,6 +103,121 @@ struct ScreenshotTests {
         try await capture(LeaderboardView().environment(ranked.app), "14-leaderboard", to: output)
     }
 
+    /// Records the moments that move: a strip of frames over a few seconds, at about 12 frames a
+    /// second, at 1x so a strip stays small. CI uploads them under `filmstrips/<moment>/`, where
+    /// contact sheets of them show whether an animation reads well and lands on time.
+    @Test(.enabled(if: directory != nil))
+    func renderFilmstrips() async throws {
+        let output = URL(fileURLWithPath: try #require(Self.directory), isDirectory: true).appendingPathComponent("filmstrips", isDirectory: true)
+        let showcase = try Showcase()
+        let app = showcase.app
+
+        // The player's shot hits, misses and sinks; the computer's reply lands on the home board.
+        let classic = try #require(app.solo.match(showcase.classicBattle))
+        let enemy = classic.battle.fleet(of: ComputerMatch.computer)
+        let known = Set(classic.perspective.myShots.map(\.target))
+        let battleship = try #require(enemy.first { $0.kind == .battleship })
+        let hitTarget = try #require(battleship.cells.first { !known.contains($0) })
+        let water = try #require(Rules.classic.allCoordinates.first { cell in !known.contains(cell) && !enemy.contains { $0.contains(cell) } })
+        let cruiser = try #require(enemy.first { $0.kind == .cruiser })
+        let lastCruiserCells = cruiser.cells.filter { !known.contains($0) }
+
+        try await filmstrip("battle-hit", to: output, seconds: 2.6) {
+            let controller = BattleController(route: .solo(showcase.classicBattle), app: app)
+            controller.computerPause = 60_000...60_000
+            return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, { controller.tapTarget(hitTarget); Task { await controller.fire() } })
+        }
+        try await filmstrip("battle-miss", to: output, seconds: 2.2) {
+            let controller = BattleController(route: .solo(showcase.classicBattle), app: app)
+            controller.computerPause = 60_000...60_000
+            return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, { controller.tapTarget(water); Task { await controller.fire() } })
+        }
+        try await filmstrip("battle-sunk", to: output, seconds: 3.4) {
+            var match = classic
+            for cell in lastCruiserCells.dropLast() {
+                try match.fire(at: cell)
+                match.playComputerTurn()
+            }
+            app.solo.update(match)
+            let controller = BattleController(route: .solo(showcase.classicBattle), app: app)
+            controller.computerPause = 60_000...60_000
+            let last = try #require(lastCruiserCells.last)
+            return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, { controller.tapTarget(last); Task { await controller.fire() } })
+        }
+        try await filmstrip("battle-incoming", to: output, seconds: 3.0) {
+            app.solo.update(classic)
+            let controller = BattleController(route: .solo(showcase.classicBattle), app: app)
+            controller.computerPause = 400...400
+            return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, { controller.tapTarget(water); Task { await controller.fire() } })
+        }
+
+        // The end of a game, from the moment the result is shown.
+        for (name, didWin, opponent) in [("victory", true, "ahab"), ("defeat", false, "Computer (Admiral)")] {
+            try await filmstrip(name, to: output, seconds: 3.4) {
+                let shows = ShowsOutcome()
+                return (AnyView(OutcomeStrip(shows: shows, didWin: didWin, opponent: opponent)), nil, { shows.isOn = true })
+            }
+        }
+
+        // Screens whose entrance is the show.
+        try await filmstrip("welcome", to: output, seconds: 3.0, settle: 0) {
+            (AnyView(WelcomeView {}), nil, {})
+        }
+        try await filmstrip("lobby", to: output, seconds: 2.6, settle: 0) {
+            (AnyView(RootView().environment(app)), nil, {})
+        }
+        try await filmstrip("challenge", to: output, seconds: 2.6, settle: 0) {
+            (AnyView(NavigationStack { BattleView(route: .online(showcase.challenge), app: app) }.environment(app)), nil, {})
+        }
+    }
+
+    /// Shows `make()`'s view, waits `settle` seconds, runs its action, then saves frames for `seconds`.
+    private func filmstrip(
+        _ name: String,
+        to directory: URL,
+        seconds: Double,
+        settle: Double = 1.5,
+        make: @MainActor () throws -> (view: AnyView, controller: BattleController?, action: @MainActor () -> Void)
+    ) async throws {
+        let folder = directory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let (view, controller, action) = try make()
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: scene.screen.bounds.size)
+        window.overrideUserInterfaceStyle = .dark
+        window.rootViewController = UIHostingController(rootView: view)
+        window.makeKeyAndVisible()
+        controller?.viewDidAppear()
+        if settle > 0 {
+            try await Task.sleep(for: .seconds(settle))
+            if let controller {
+                await controller.load()
+            }
+        }
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: format)
+        let start = ContinuousClock.now
+        action()
+        var frame = 0
+        while ContinuousClock.now - start < .seconds(seconds) {
+            let image = renderer.image { _ in
+                _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let elapsed = (ContinuousClock.now - start) / .milliseconds(1)
+            try #require(image.jpegData(compressionQuality: 0.82))
+                .write(to: folder.appendingPathComponent(String(format: "%02d-%04dms.jpg", frame, Int(elapsed))))
+            frame += 1
+            try await Task.sleep(for: .milliseconds(80))
+        }
+        controller?.viewDidDisappear()
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
     private func capture(
         _ view: some View,
         _ name: String,
@@ -136,6 +252,39 @@ struct ScreenshotTests {
         try #require(image.pngData()).write(to: directory.appendingPathComponent("\(name).png"))
         window.isHidden = true
         window.rootViewController = nil
+    }
+}
+
+/// A switch a filmstrip flips after its first frame, e.g. to bring in the game-over card.
+@MainActor
+@Observable
+private final class ShowsOutcome {
+    var isOn = false
+}
+
+/// The end of a battle arriving over the ocean, for the victory and defeat filmstrips.
+private struct OutcomeStrip: View {
+    let shows: ShowsOutcome
+    let didWin: Bool
+    let opponent: String
+
+    var body: some View {
+        ZStack {
+            OceanBackdrop()
+            if shows.isOn {
+                GameOverOverlay(
+                    didWin: didWin,
+                    reason: .fleetDestroyed,
+                    opponentName: opponent,
+                    stats: ShotStats(shotsFired: 41, hits: 17),
+                    celebrates: didWin,
+                    onRematch: {},
+                    onClose: {}
+                )
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.35), value: shows.isOn)
     }
 }
 
