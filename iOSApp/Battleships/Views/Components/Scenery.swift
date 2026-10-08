@@ -34,7 +34,7 @@ struct HorizonScene: View {
             ZStack(alignment: .bottomLeading) {
                 SailingShip()
                     .frame(width: shipWidth, height: shipWidth * 0.3)
-                    .offset(x: proxy.size.width * shipPosition - shipWidth / 2, y: -proxy.size.height * 0.3)
+                    .offset(x: proxy.size.width * shipPosition - shipWidth / 2, y: -proxy.size.height * 0.24)
                 WavesView(amplitude: 4)
                     .frame(height: proxy.size.height * 0.62)
             }

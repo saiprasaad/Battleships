@@ -206,7 +206,7 @@ struct BattleView: View {
                         targetBoard(perspective)
                     }
                     .frame(width: layout.side)
-                    BoardSection(title: "Your Fleet", detail: "\(perspective.enemyStats.hits) hits taken") {
+                    BoardSection(title: "Your Fleet", detail: Self.count(perspective.enemyStats.hits, "hit") + " taken") {
                         HomeBoard(perspective: perspective, effects: controller.effects, isUnderFire: isUnderFire)
                             .shakes(on: controller.hitsTaken)
                     }
@@ -266,7 +266,12 @@ struct BattleView: View {
 
     private func shotsDetail(_ stats: ShotStats) -> String? {
         guard stats.shotsFired > 0 else { return nil }
-        return "\(stats.shotsFired) shots · \(stats.hits) hits"
+        return Self.count(stats.shotsFired, "shot") + " · " + Self.count(stats.hits, "hit")
+    }
+
+    /// "1 hit", "3 hits".
+    private static func count(_ number: Int, _ noun: String) -> String {
+        "\(number) \(noun)\(number == 1 ? "" : "s")"
     }
 
     @ViewBuilder

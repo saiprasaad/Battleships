@@ -7,8 +7,11 @@ import UserNotifications
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     private(set) lazy var model: AppModel = {
         let settings = AppSettings()
-        let haptics = Haptics(isEnabled: { settings.hapticsEnabled })
-        return AppModel(settings: settings, tokenStorage: KeychainTokenStorage(), feedback: haptics)
+        let feedback = CombinedFeedback([
+            Haptics(isEnabled: { settings.hapticsEnabled }),
+            SoundEffects(isEnabled: { settings.soundEnabled }),
+        ])
+        return AppModel(settings: settings, tokenStorage: KeychainTokenStorage(), feedback: feedback)
     }()
 
     func application(

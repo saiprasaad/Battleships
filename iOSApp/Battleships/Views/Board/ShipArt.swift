@@ -172,9 +172,9 @@ enum ShipArt {
 
         var art = base
         if isSunk {
-            art.addFilter(.grayscale(0.9))
-            art.addFilter(.colorMultiply(Color(red: 0.78, green: 0.45, blue: 0.38)))
-            art.addFilter(.brightness(-0.18))
+            art.addFilter(.grayscale(0.85))
+            art.addFilter(.colorMultiply(Color(red: 0.86, green: 0.52, blue: 0.44)))
+            art.addFilter(.brightness(-0.06))
         }
 
         // Hull and deck, lit along the centre line.
@@ -218,23 +218,23 @@ enum ShipArt {
 
         switch kind {
         case .battleship:
-            turret(at: CGPoint(x: x(0.79), y: midY), radius: beam * 0.2, facing: 1, barrels: 3, reach: beam * 0.42, in: &context)
-            turret(at: CGPoint(x: x(0.66), y: midY), radius: beam * 0.23, facing: 1, barrels: 3, reach: beam * 0.5, in: &context)
-            superstructure(CGRect(x: x(0.36), y: midY - beam * 0.25, width: length * 0.21, height: beam * 0.5), in: &context)
-            funnel(at: CGPoint(x: x(0.43), y: midY), width: length * 0.065, height: beam * 0.26, in: &context)
-            mast(at: CGPoint(x: x(0.53), y: midY), radius: beam * 0.1, in: &context)
-            turret(at: CGPoint(x: x(0.22), y: midY), radius: beam * 0.23, facing: -1, barrels: 3, reach: beam * 0.5, in: &context)
+            turret(at: CGPoint(x: x(0.8), y: midY), radius: beam * 0.2, facing: 1, barrels: 3, reach: beam * 0.42, in: &context)
+            turret(at: CGPoint(x: x(0.64), y: midY), radius: beam * 0.23, facing: 1, barrels: 3, reach: beam * 0.32, in: &context)
+            superstructure(CGRect(x: x(0.34), y: midY - beam * 0.25, width: length * 0.21, height: beam * 0.5), in: &context)
+            funnel(at: CGPoint(x: x(0.4), y: midY), width: length * 0.07, height: beam * 0.3, in: &context)
+            mast(at: CGPoint(x: x(0.5), y: midY), radius: beam * 0.1, in: &context)
+            turret(at: CGPoint(x: x(0.2), y: midY), radius: beam * 0.23, facing: -1, barrels: 3, reach: beam * 0.5, in: &context)
         case .cruiser:
-            turret(at: CGPoint(x: x(0.76), y: midY), radius: beam * 0.2, facing: 1, barrels: 2, reach: beam * 0.42, in: &context)
-            turret(at: CGPoint(x: x(0.62), y: midY), radius: beam * 0.22, facing: 1, barrels: 2, reach: beam * 0.45, in: &context)
-            superstructure(CGRect(x: x(0.34), y: midY - beam * 0.24, width: length * 0.2, height: beam * 0.48), in: &context)
-            funnel(at: CGPoint(x: x(0.41), y: midY), width: length * 0.07, height: beam * 0.24, in: &context)
-            mast(at: CGPoint(x: x(0.5), y: midY), radius: beam * 0.09, in: &context)
-            turret(at: CGPoint(x: x(0.2), y: midY), radius: beam * 0.22, facing: -1, barrels: 2, reach: beam * 0.45, in: &context)
+            turret(at: CGPoint(x: x(0.77), y: midY), radius: beam * 0.2, facing: 1, barrels: 2, reach: beam * 0.4, in: &context)
+            turret(at: CGPoint(x: x(0.6), y: midY), radius: beam * 0.22, facing: 1, barrels: 2, reach: beam * 0.3, in: &context)
+            superstructure(CGRect(x: x(0.3), y: midY - beam * 0.24, width: length * 0.19, height: beam * 0.48), in: &context)
+            funnel(at: CGPoint(x: x(0.36), y: midY), width: length * 0.075, height: beam * 0.28, in: &context)
+            mast(at: CGPoint(x: x(0.45), y: midY), radius: beam * 0.09, in: &context)
+            turret(at: CGPoint(x: x(0.17), y: midY), radius: beam * 0.22, facing: -1, barrels: 2, reach: beam * 0.4, in: &context)
         case .destroyer:
             turret(at: CGPoint(x: x(0.7), y: midY), radius: beam * 0.21, facing: 1, barrels: 1, reach: beam * 0.5, in: &context)
             superstructure(CGRect(x: x(0.42), y: midY - beam * 0.24, width: length * 0.17, height: beam * 0.48), in: &context)
-            funnel(at: CGPoint(x: x(0.34), y: midY), width: length * 0.08, height: beam * 0.24, in: &context)
+            funnel(at: CGPoint(x: x(0.34), y: midY), width: length * 0.085, height: beam * 0.28, in: &context)
             // Torpedo tubes on the after deck.
             let tubes = Path { path in
                 for offset: CGFloat in [-0.14, 0.14] {
@@ -414,8 +414,18 @@ enum ShipArt {
     @MainActor
     private static func funnel(at center: CGPoint, width: CGFloat, height: CGFloat, in context: inout GraphicsContext) {
         let outer = CGRect(x: center.x - width / 2, y: center.y - height / 2, width: width, height: height)
-        context.fill(Path(ellipseIn: outer), with: .color(Theme.gunMetal))
-        context.fill(Path(ellipseIn: outer.insetBy(dx: width * 0.22, dy: height * 0.22)), with: .color(.black.opacity(0.75)))
+        context.fill(
+            Path(ellipseIn: outer),
+            with: .radialGradient(
+                Gradient(colors: [Color(red: 0.5, green: 0.54, blue: 0.6), Theme.gunMetal]),
+                center: center,
+                startRadius: 0,
+                endRadius: max(width, height) / 2
+            )
+        )
+        context.stroke(Path(ellipseIn: outer), with: .color(.black.opacity(0.35)), lineWidth: max(0.4, height * 0.06))
+        let smoke = outer.insetBy(dx: width * 0.3, dy: height * 0.3)
+        context.fill(Path(ellipseIn: smoke), with: .color(Color(red: 0.08, green: 0.09, blue: 0.12).opacity(0.7)))
     }
 
     @MainActor

@@ -181,23 +181,21 @@ struct CountingStat: View {
 struct Sunburst: View {
     var color: Color = Theme.gold
     var rays = 18
-    @State private var spin = 0.0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        AngularGradient(stops: Self.stops(color: color, rays: rays), center: .center, angle: .zero)
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
+            ZStack {
+                AngularGradient(stops: Self.stops(color: color, rays: rays), center: .center, angle: .zero)
+                    .rotationEffect(.degrees(reduceMotion ? 0 : Motion.cycle(timeline.date, period: 60) * 360))
+                RadialGradient(colors: [color.opacity(0.45), color.opacity(0)], center: .center, startRadius: 0, endRadius: 190)
+            }
             .mask {
-                RadialGradient(colors: [.white, .white.opacity(0.5), .white.opacity(0)], center: .center, startRadius: 30, endRadius: 340)
+                RadialGradient(colors: [.white, .white.opacity(0.55), .white.opacity(0)], center: .center, startRadius: 30, endRadius: 340)
             }
-            .rotationEffect(.degrees(spin))
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.linear(duration: 60).repeatForever(autoreverses: false)) {
-                    spin = 360
-                }
-            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private static func stops(color: Color, rays: Int) -> [Gradient.Stop] {
@@ -207,8 +205,8 @@ struct Sunburst: View {
             let start = CGFloat(ray) / count
             let middle = (CGFloat(ray) + 0.5) / count
             let end = CGFloat(ray + 1) / count
-            stops.append(Gradient.Stop(color: color.opacity(0.3), location: start))
-            stops.append(Gradient.Stop(color: color.opacity(0.3), location: middle))
+            stops.append(Gradient.Stop(color: color.opacity(0.36), location: start))
+            stops.append(Gradient.Stop(color: color.opacity(0.36), location: middle))
             stops.append(Gradient.Stop(color: color.opacity(0), location: middle))
             stops.append(Gradient.Stop(color: color.opacity(0), location: end))
         }
@@ -234,17 +232,18 @@ struct SinkingShip: View {
     private static func draw(time: TimeInterval, in context: GraphicsContext, size: CGSize) {
         let t = CGFloat(time)
         let waterline = size.height * 0.62
-        let progress = min(1, max(0, (t - 0.5) / 2.6))
+        let progress = min(1, max(0, (t - 0.5) / 2.4))
         let sink = progress * progress * (3 - 2 * progress)
         let swell = sin(t * 2.2) * 2
 
-        // The ship, tilting bow-up as it goes down, hidden below the waterline.
+        // The ship goes down by the stern and settles with its bow raised, the rest hidden below
+        // the waterline.
         let hull = CGRect(x: size.width * 0.14, y: waterline - size.height * 0.4, width: size.width * 0.72, height: size.height * 0.5)
-        let pivot = CGPoint(x: hull.midX, y: waterline)
+        let pivot = CGPoint(x: hull.minX + hull.width * 0.3, y: waterline)
         var ship = context
         ship.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: waterline + swell)))
-        ship.translateBy(x: pivot.x, y: pivot.y + sink * size.height * 0.55 + swell)
-        ship.rotate(by: .degrees(Double(-20 * sink)))
+        ship.translateBy(x: pivot.x, y: pivot.y + sink * size.height * 0.3 + swell * (1 + sink))
+        ship.rotate(by: .degrees(Double(-26 * sink + sin(t * 1.4) * 1.5 * sink)))
         ship.translateBy(x: -pivot.x, y: -pivot.y)
         ship.fill(
             WarshipProfile().path(in: hull),

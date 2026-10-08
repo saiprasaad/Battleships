@@ -102,40 +102,36 @@ struct WavesView: View {
 struct SonarSweep: View {
     var tint: Color = Theme.reticle
     var period: Double = 3.2
-    @State private var angle: Double = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        GeometryReader { proxy in
-            let side = max(proxy.size.width, proxy.size.height) * 1.5
-            ZStack {
-                AngularGradient(
-                    stops: [
-                        .init(color: tint.opacity(0), location: 0),
-                        .init(color: tint.opacity(0), location: 0.72),
-                        .init(color: tint.opacity(0.32), location: 0.999),
-                        .init(color: tint.opacity(0), location: 1),
-                    ],
-                    center: .center,
-                    angle: .zero
-                )
-                Rectangle()
-                    .fill(LinearGradient(colors: [tint.opacity(0.9), tint.opacity(0)], startPoint: .leading, endPoint: .trailing))
-                    .frame(width: side / 2, height: 1.5)
-                    .offset(x: side / 4)
+        TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { timeline in
+            let turns = reduceMotion ? 0.15 : Motion.cycle(timeline.date, period: period)
+            GeometryReader { proxy in
+                let side = max(proxy.size.width, proxy.size.height) * 1.5
+                ZStack {
+                    AngularGradient(
+                        stops: [
+                            .init(color: tint.opacity(0), location: 0),
+                            .init(color: tint.opacity(0), location: 0.72),
+                            .init(color: tint.opacity(0.32), location: 0.999),
+                            .init(color: tint.opacity(0), location: 1),
+                        ],
+                        center: .center,
+                        angle: .zero
+                    )
+                    Rectangle()
+                        .fill(LinearGradient(colors: [tint.opacity(0.9), tint.opacity(0)], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: side / 2, height: 1.5)
+                        .offset(x: side / 4)
+                }
+                .frame(width: side, height: side)
+                .rotationEffect(.degrees(turns * 360))
+                .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
             }
-            .frame(width: side, height: side)
-            .rotationEffect(.degrees(angle))
-            .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.linear(duration: period).repeatForever(autoreverses: false)) {
-                angle = 360
-            }
-        }
     }
 }
 
@@ -181,49 +177,40 @@ struct RadarScope: View {
 private struct RadarContact: View {
     let tint: Color
     let delay: Double
-    @State private var isLit = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Circle()
-            .fill(tint)
-            .frame(width: 6, height: 6)
-            .glow(tint, radius: 6)
-            .opacity(isLit ? 1 : 0.12)
-            .onAppear {
-                guard !reduceMotion else {
-                    isLit = true
-                    return
-                }
-                withAnimation(.easeInOut(duration: 1.3).repeatForever(autoreverses: true).delay(delay)) {
-                    isLit = true
-                }
-            }
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
+            let glow = reduceMotion ? 1 : 0.5 + 0.5 * sin(2 * .pi * (Motion.seconds(timeline.date) - delay) / 2.6)
+            Circle()
+                .fill(tint)
+                .frame(width: 6, height: 6)
+                .glow(tint, radius: 6)
+                .opacity(0.12 + 0.88 * glow)
+        }
     }
 }
 
 /// Concentric rings that ripple outwards, like a sonar ping.
 struct SonarPing: View {
     var tint: Color = Theme.reticle
-    @State private var expanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack {
-            ForEach(0..<3, id: \.self) { ring in
-                Circle()
-                    .stroke(tint.opacity(0.5), lineWidth: 1)
-                    .scaleEffect(expanded ? 1 : 0.2 + Double(ring) * 0.25)
-                    .opacity(expanded ? 0 : 0.9)
-                    .animation(
-                        reduceMotion ? nil : .easeOut(duration: 2.4).repeatForever(autoreverses: false).delay(Double(ring) * 0.8),
-                        value: expanded
-                    )
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
+            let now = Motion.seconds(timeline.date)
+            ZStack {
+                ForEach(0..<3, id: \.self) { ring in
+                    let progress = reduceMotion ? 0.3 + Double(ring) * 0.25 : Motion.cycle(now + Double(ring) * 0.8, period: 2.4)
+                    Circle()
+                        .stroke(tint.opacity(0.5), lineWidth: 1)
+                        .scaleEffect(0.2 + 0.8 * Motion.easeOut(progress))
+                        .opacity(0.9 * (1 - progress))
+                }
             }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .onAppear { expanded = true }
     }
 }
 
@@ -248,20 +235,41 @@ struct PulsingDot: View {
 
 private struct PulseRing: View {
     let color: Color
-    @State private var expanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Circle()
-            .stroke(color, lineWidth: 1.5)
-            .scaleEffect(expanded ? 2.8 : 1)
-            .opacity(expanded ? 0 : 0.9)
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                    expanded = true
-                }
+        if !reduceMotion {
+            TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+                let progress = Motion.cycle(timeline.date, period: 1.2)
+                Circle()
+                    .stroke(color, lineWidth: 1.5)
+                    .scaleEffect(1 + 1.8 * Motion.easeOut(progress))
+                    .opacity(0.9 * (1 - progress))
             }
+        }
+    }
+}
+
+/// Clock arithmetic for looping effects. They're drawn from the time on a `TimelineView` rather
+/// than animated from `onAppear`, which would also animate the view's first layout.
+enum Motion {
+    static func seconds(_ date: Date) -> Double {
+        date.timeIntervalSinceReferenceDate
+    }
+
+    /// How far through a loop of `period` seconds the clock is, from 0 to 1.
+    static func cycle(_ date: Date, period: Double) -> Double {
+        cycle(seconds(date), period: period)
+    }
+
+    static func cycle(_ seconds: Double, period: Double) -> Double {
+        let remainder = seconds.truncatingRemainder(dividingBy: period) / period
+        return remainder < 0 ? remainder + 1 : remainder
+    }
+
+    static func easeOut(_ progress: Double) -> Double {
+        let clamped = min(max(progress, 0), 1)
+        return 1 - pow(1 - clamped, 3)
     }
 }
 

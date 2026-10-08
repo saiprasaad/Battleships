@@ -256,7 +256,7 @@ private struct LobbyHero: View {
                 OceanBackdrop(extendsIntoSafeArea: false)
                 RadarScope()
                     .frame(width: 230, height: 230)
-                    .offset(x: 70, y: -40)
+                    .offset(x: 92, y: -62)
                     .opacity(0.85)
                 HorizonScene(shipPosition: 0.68, shipWidth: 128)
                     .frame(height: 84)

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Moments in a game that deserve tactile feedback.
-enum FeedbackEvent: Sendable {
+enum FeedbackEvent: CaseIterable, Sendable {
     case select
     case aim
     case place
@@ -18,6 +18,22 @@ enum FeedbackEvent: Sendable {
 @MainActor
 protocol FeedbackPlayer: AnyObject {
     func play(_ event: FeedbackEvent)
+}
+
+/// Plays each event on several players, e.g. haptics and sound.
+@MainActor
+final class CombinedFeedback: FeedbackPlayer {
+    private let players: [any FeedbackPlayer]
+
+    init(_ players: [any FeedbackPlayer]) {
+        self.players = players
+    }
+
+    func play(_ event: FeedbackEvent) {
+        for player in players {
+            player.play(event)
+        }
+    }
 }
 
 /// Turns any error into a sentence fit for an alert.

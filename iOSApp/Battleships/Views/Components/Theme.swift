@@ -138,26 +138,22 @@ struct FireButtonStyle: ButtonStyle {
     }
 }
 
-/// Rings pulsing out of the Fire button while a target is locked.
+/// A ring pulsing out of the Fire button while a target is locked.
 private struct ArmedHalo: View {
-    @State private var pulse = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack {
-            Capsule()
-                .stroke(Theme.flame, lineWidth: 2)
-                .scaleEffect(pulse ? 1.35 : 1)
-                .opacity(pulse ? 0 : 0.9)
-            Capsule()
-                .fill(Theme.hit.opacity(pulse ? 0.15 : 0.45))
-                .blur(radius: 12)
-                .scaleEffect(pulse ? 1.2 : 1.05)
-        }
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeOut(duration: 1.1).repeatForever(autoreverses: false)) {
-                pulse = true
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
+            let progress = reduceMotion ? 0.3 : Motion.cycle(timeline.date, period: 1.1)
+            ZStack {
+                Capsule()
+                    .stroke(Theme.flame, lineWidth: 2)
+                    .padding(-14 * Motion.easeOut(progress))
+                    .opacity(0.9 * (1 - progress))
+                Capsule()
+                    .fill(Theme.hit.opacity(0.45 - 0.3 * progress))
+                    .blur(radius: 12)
+                    .padding(-4 - 4 * progress)
             }
         }
     }

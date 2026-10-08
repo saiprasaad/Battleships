@@ -25,7 +25,6 @@ struct ProfileView: View {
                     .listRowBackground(Color.clear)
                     Section {
                         HStack {
-                            StatTile(title: "Rating", value: "\(account.stats.rating)")
                             StatTile(title: "Wins", value: "\(account.stats.wins)")
                             StatTile(title: "Losses", value: "\(account.stats.losses)")
                             StatTile(
@@ -72,6 +71,9 @@ struct ProfileView: View {
                 .listRowBackground(Theme.rowBackground)
 
                 Section {
+                    Toggle(isOn: Bindable(app.settings).soundEnabled) {
+                        Label("Sound Effects", systemImage: "speaker.wave.2.fill")
+                    }
                     Toggle(isOn: Bindable(app.settings).hapticsEnabled) {
                         Label("Haptics", systemImage: "iphone.radiowaves.left.and.right")
                     }

@@ -105,8 +105,8 @@ struct SeaGrid: View {
 
         // Corner marks just outside the water, like a targeting display.
         guard isDetailed else { return }
-        let inset: CGFloat = 4
-        let arm = min(16, geometry.cell * 0.45)
+        let inset: CGFloat = 3
+        let arm = min(12, geometry.cell * 0.3)
         let outer = rect.insetBy(dx: -inset, dy: -inset)
         var corners = Path()
         corners.move(to: CGPoint(x: outer.minX, y: outer.minY + arm))
@@ -223,37 +223,39 @@ struct FlameMark: View {
     let cell: CGFloat
     var scale: CGFloat = 1
     var showsHalo = true
-    @State private var flicker = false
+    /// Each fire flickers at its own pace.
+    @State private var rhythm = FlameMark.makeRhythm()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    nonisolated private static func makeRhythm() -> (phase: Double, speed: Double) {
+        (.random(in: 0...(2 * .pi)), .random(in: 2.4...3.6))
+    }
+
     var body: some View {
-        ZStack {
-            if showsHalo {
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Theme.flame.opacity(0.6), Theme.hit.opacity(0.25), Theme.hit.opacity(0)],
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: cell * 0.5
+        TimelineView(.animation(minimumInterval: 1 / 24, paused: reduceMotion)) { timeline in
+            let flicker = reduceMotion ? 0.5 : 0.5 + 0.5 * sin(Motion.seconds(timeline.date) * rhythm.speed * 2 * .pi + rhythm.phase)
+            ZStack {
+                if showsHalo {
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [Theme.flame.opacity(0.6), Theme.hit.opacity(0.25), Theme.hit.opacity(0)],
+                                center: .center,
+                                startRadius: 0,
+                                endRadius: cell * 0.5
+                            )
                         )
-                    )
-                    .frame(width: cell, height: cell)
-                    .scaleEffect(flicker ? 1.08 : 0.92)
+                        .frame(width: cell, height: cell)
+                        .scaleEffect(0.92 + 0.16 * flicker)
+                }
+                Image(systemName: "flame.fill")
+                    .font(.system(size: cell * 0.52 * scale))
+                    .foregroundStyle(LinearGradient(colors: [Theme.ember, Theme.flame, Theme.hit], startPoint: .top, endPoint: .bottom))
+                    .scaleEffect(x: 1.04 - 0.1 * flicker, y: 0.94 + 0.14 * flicker, anchor: .bottom)
+                    .shadow(color: Theme.flame.opacity(0.9), radius: cell * 0.12 * scale)
             }
-            Image(systemName: "flame.fill")
-                .font(.system(size: cell * 0.52 * scale))
-                .foregroundStyle(LinearGradient(colors: [Theme.ember, Theme.flame, Theme.hit], startPoint: .top, endPoint: .bottom))
-                .scaleEffect(x: flicker ? 0.94 : 1.04, y: flicker ? 1.08 : 0.94, anchor: .bottom)
-                .shadow(color: Theme.flame.opacity(0.9), radius: cell * 0.12 * scale)
         }
         .allowsHitTesting(false)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: .random(in: 0.14...0.24)).repeatForever(autoreverses: true)) {
-                flicker = true
-            }
-        }
     }
 }
 
@@ -262,15 +264,16 @@ struct FlameMark: View {
 struct ReticleView: View {
     let cell: CGFloat
     let target: Coordinate
-    @State private var spin = 0.0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
-            Circle()
-                .strokeBorder(Theme.reticle.opacity(0.9), style: StrokeStyle(lineWidth: max(1, cell * 0.045), dash: [cell * 0.1, cell * 0.07]))
-                .frame(width: cell * 0.72, height: cell * 0.72)
-                .rotationEffect(.degrees(spin))
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { timeline in
+                Circle()
+                    .strokeBorder(Theme.reticle.opacity(0.9), style: StrokeStyle(lineWidth: max(1, cell * 0.045), dash: [cell * 0.1, cell * 0.07]))
+                    .frame(width: cell * 0.72, height: cell * 0.72)
+                    .rotationEffect(.degrees(reduceMotion ? 0 : Motion.cycle(timeline.date, period: 5) * 360))
+            }
             LockOnBrackets(cell: cell)
                 .id(target)
             Circle()
@@ -280,12 +283,6 @@ struct ReticleView: View {
         .glow(Theme.reticle, radius: cell * 0.18)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.linear(duration: 5).repeatForever(autoreverses: false)) {
-                spin = 360
-            }
-        }
     }
 }
 

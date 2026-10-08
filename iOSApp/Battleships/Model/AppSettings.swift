@@ -8,6 +8,7 @@ final class AppSettings {
     private enum Keys {
         static let serverURL = "serverURL"
         static let haptics = "hapticsEnabled"
+        static let sound = "soundEnabled"
         static let askedForNotifications = "askedForNotifications"
         static let seenWelcome = "hasSeenWelcome"
     }
@@ -24,6 +25,10 @@ final class AppSettings {
 
     var hapticsEnabled: Bool {
         didSet { defaults.set(hapticsEnabled, forKey: Keys.haptics) }
+    }
+
+    var soundEnabled: Bool {
+        didSet { defaults.set(soundEnabled, forKey: Keys.sound) }
     }
 
     /// Whether the app has already asked for permission to send notifications.
@@ -43,6 +48,7 @@ final class AppSettings {
         defaultServerURL = configured ?? URL(string: "http://localhost:8080")!
         serverURL = defaults.string(forKey: Keys.serverURL).flatMap(Self.validatedServerURL) ?? defaultServerURL
         hapticsEnabled = defaults.object(forKey: Keys.haptics) as? Bool ?? true
+        soundEnabled = defaults.object(forKey: Keys.sound) as? Bool ?? true
         hasAskedForNotifications = defaults.bool(forKey: Keys.askedForNotifications)
         hasSeenWelcome = defaults.bool(forKey: Keys.seenWelcome)
     }

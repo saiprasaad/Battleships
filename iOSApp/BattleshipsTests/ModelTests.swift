@@ -229,6 +229,15 @@ struct SettingsAndLayoutTests {
     }
 
     @MainActor
+    @Test func soundIsOnUntilTurnedOff() throws {
+        let defaults = try #require(UserDefaults(suiteName: "SoundTest-\(UUID().uuidString)"))
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.soundEnabled)
+        settings.soundEnabled = false
+        #expect(!AppSettings(defaults: defaults).soundEnabled)
+    }
+
+    @MainActor
     @Test func remembersTheWelcomeScreen() throws {
         let defaults = try #require(UserDefaults(suiteName: "WelcomeTest-\(UUID().uuidString)"))
         let settings = AppSettings(defaults: defaults)
@@ -250,5 +259,25 @@ struct SettingsAndLayoutTests {
         let rect = geometry.rect(for: carrier)
         #expect(abs(rect.height - geometry.cell * 5) < 0.001)
         #expect(abs(rect.width - geometry.cell) < 0.001)
+    }
+}
+
+@Suite("Sound effects")
+struct SoundEffectTests {
+    @Test(arguments: FeedbackEvent.allCases)
+    func everyEventHasAWellFormedSound(event: FeedbackEvent) {
+        let samples = SoundSynthesis.samples(for: event)
+        #expect(!samples.isEmpty)
+        #expect(samples.allSatisfy { $0.isFinite && abs($0) <= 1 })
+        #expect(samples.contains { abs($0) > 0.05 })
+    }
+
+    @Test func shellsLandAfterTheirFlight() {
+        let flight = SoundSynthesis.frames(SoundSynthesis.flightTime)
+        for event in [FeedbackEvent.hit, .miss, .sunk] {
+            let samples = SoundSynthesis.samples(for: event)
+            #expect(samples.prefix(flight).allSatisfy { $0 == 0 }, "silent while the shell is in the air")
+            #expect(samples.dropFirst(flight).prefix(4_000).contains { abs($0) > 0.1 }, "then it lands")
+        }
     }
 }

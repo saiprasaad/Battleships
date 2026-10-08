@@ -96,34 +96,17 @@ enum ImpactBurst {
             )
         }
 
-        var light = context
-        light.blendMode = .plusLighter
-
-        // The flash.
-        if t < 0.25 {
-            let flash = 1 - t / 0.25
-            let radius = cell * (0.6 + 1.2 * t)
-            light.fill(
-                Path(ellipseIn: circle(center, radius)),
-                with: .radialGradient(
-                    Gradient(colors: [Color.white.opacity(flash), Theme.ember.opacity(0.7 * flash), Theme.flame.opacity(0)]),
-                    center: center,
-                    startRadius: 0,
-                    endRadius: radius
-                )
-            )
-        }
-
-        // The fireball.
-        let fireball = cell * (0.35 + 0.75 * burst)
-        light.fill(
+        // The fireball, coloured whatever lies beneath it.
+        let fireball = cell * (0.35 + 0.8 * burst)
+        context.fill(
             Path(ellipseIn: circle(center, fireball)),
             with: .radialGradient(
                 Gradient(colors: [
-                    Theme.ember.opacity(fade),
-                    Theme.flame.opacity(0.85 * fade),
-                    Theme.hit.opacity(0.5 * fade),
-                    Theme.hit.opacity(0),
+                    Theme.ember.opacity(0.95 * fade),
+                    Theme.flame.opacity(0.9 * fade),
+                    Theme.hit.opacity(0.75 * fade),
+                    Color(red: 0.6, green: 0.08, blue: 0.04).opacity(0.35 * fade),
+                    Color(red: 0.6, green: 0.08, blue: 0.04).opacity(0),
                 ]),
                 center: center,
                 startRadius: 0,
@@ -131,27 +114,44 @@ enum ImpactBurst {
             )
         )
 
+        // A white-hot core and flash, added as light.
+        if t < 0.3 {
+            let flash = 1 - t / 0.3
+            let radius = cell * (0.45 + 0.6 * t)
+            var light = context
+            light.blendMode = .plusLighter
+            light.fill(
+                Path(ellipseIn: circle(center, radius)),
+                with: .radialGradient(
+                    Gradient(colors: [Color.white.opacity(0.9 * flash), Theme.ember.opacity(0.5 * flash), Theme.flame.opacity(0)]),
+                    center: center,
+                    startRadius: 0,
+                    endRadius: radius
+                )
+            )
+        }
+
         // The shock wave.
         context.stroke(
-            Path(ellipseIn: circle(center, cell * (0.4 + 1.25 * burst))),
-            with: .color(Theme.flame.opacity(0.75 * fade)),
-            lineWidth: 0.5 + cell * 0.07 * fade
+            Path(ellipseIn: circle(center, cell * (0.45 + 1.25 * burst))),
+            with: .color(Theme.flame.opacity(0.7 * fade)),
+            lineWidth: 0.5 + cell * 0.06 * fade
         )
 
         // Sparks, each trailing a streak.
-        let trail = easeOut(max(0, t - 0.06))
+        let trail = easeOut(max(0, t - 0.08))
         for particle in particles {
             let reach = cell * particle.reach * 1.3
             let dx = cos(particle.angle)
             let dy = sin(particle.angle)
             let head = CGPoint(x: center.x + dx * reach * burst, y: center.y + dy * reach * burst)
             let tail = CGPoint(x: center.x + dx * reach * trail, y: center.y + dy * reach * trail)
-            let color = particle.tint > 0.5 ? Theme.ember : Theme.flame
+            let color = particle.tint > 0.5 ? Theme.flame : Theme.hit
             var streak = Path()
             streak.move(to: tail)
             streak.addLine(to: head)
-            light.stroke(streak, with: .color(color.opacity(0.8 * fade)), lineWidth: max(0.5, cell * particle.size * 0.6 * fade))
-            light.fill(Path(ellipseIn: circle(head, cell * particle.size * fade)), with: .color(color.opacity(fade)))
+            context.stroke(streak, with: .color(color.opacity(0.85 * fade)), lineWidth: max(0.6, cell * particle.size * 0.7 * fade))
+            context.fill(Path(ellipseIn: circle(head, cell * particle.size * 0.9 * fade)), with: .color(Theme.ember.opacity(fade)))
         }
     }
 
