@@ -18,13 +18,42 @@ struct AppError: AbortError, Equatable {
     static let invalidCredentials = AppError(.unauthorized, .invalidCredentials, "Incorrect username or password.")
     static let usernameTaken = AppError(.conflict, .usernameTaken, "That username is already taken.")
     static let rateLimited = AppError(.tooManyRequests, .rateLimited, "Too many attempts. Wait a minute and try again.")
+    static let serverBusy = AppError(.tooManyRequests, .rateLimited, "The server is busy. Try again in a moment.")
+    static let tooManySignInAttempts = AppError(.tooManyRequests, .rateLimited, "Too many sign-in attempts for this account. Try again in a few minutes.")
+    static let tooManyNewGames = AppError(.tooManyRequests, .rateLimited, "You've started a lot of games recently. Wait a few minutes and try again.")
     static let gameNotFound = AppError(.notFound, .gameNotFound, "That game doesn't exist, or you're not playing in it.")
     static let playerNotFound = AppError(.notFound, .playerNotFound, "There's no player with that username.")
     static let cannotChallengeYourself = AppError(.badRequest, .cannotChallengeYourself, "You can't challenge yourself.")
     static let opponentStillHasTime = AppError(.conflict, .opponentStillHasTime, "Your opponent still has time to make their move.")
+    static let playerBlocked = AppError(.conflict, .playerBlocked, "You've blocked this player. Unblock them under Profile to play them.")
+    static let cannotBlockYourself = AppError(.badRequest, .badRequest, "You can't block or report yourself.")
+
+    static let invalidIdentityToken = AppError(.unauthorized, .invalidIdentityToken, "That sign-in couldn't be verified. Please try again.")
+    static let signupTicketUnknown = AppError(.badRequest, .signupTicketInvalid, "That sign-up has already been finished, or doesn't exist. Please sign in again.")
+    static let signupTicketExpired = AppError(.gone, .signupTicketInvalid, "That sign-up took too long. Please sign in again.")
+
+    static func signInUnavailable(_ provider: IdentityProvider) -> AppError {
+        AppError(.notFound, .signInMethodUnavailable, "Sign in with \(provider.displayName) isn't set up on this server.")
+    }
+
+    static func identityCheckUnavailable(_ provider: IdentityProvider) -> AppError {
+        AppError(.serviceUnavailable, .signInMethodUnavailable, "Couldn't reach \(provider.displayName) to check your sign-in. Try again in a moment.")
+    }
 
     static func tooManyGames(limit: Int) -> AppError {
         AppError(.conflict, .tooManyGames, "You already have \(limit) games going. Finish or resign one first.")
+    }
+
+    static func challengeAlreadySent(to opponent: String) -> AppError {
+        AppError(.conflict, .invalidGameState, "You've already challenged \(opponent). Wait for their answer, or withdraw that challenge first.")
+    }
+
+    static func challengeAlreadyReceived(from opponent: String) -> AppError {
+        AppError(.conflict, .invalidGameState, "\(opponent) has already challenged you. Accept or decline their challenge in your lobby.")
+    }
+
+    static func tooManyPendingChallenges(for opponent: String) -> AppError {
+        AppError(.conflict, .tooManyGames, "\(opponent) has too many challenges waiting for an answer. Try again later.")
     }
 
     static func invalidState(_ message: String) -> AppError {

@@ -1,5 +1,6 @@
 import BattleshipAPI
 import Fluent
+import FluentSQL
 import Vapor
 
 /// `/v1/me`: the signed-in account.
@@ -46,15 +47,21 @@ struct PlayersController: RouteCollection {
               prefix.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_") })
         else { return [] }
 
-        // LIKE treats "_" as a wildcard, so over-fetch and filter exactly.
-        let candidates = try await User.query(on: req.db)
-            .filter(\.$usernameKey =~ prefix)
+        // "_" is a wildcard in LIKE, so escape it: only real prefixes match, on SQLite and Postgres
+        // alike, and whatever the database's collation.
+        let pattern = prefix.replacingOccurrences(of: "_", with: "!_") + "%"
+        let userID = try user.requireID()
+        var query = User.query(on: req.db)
+            .filter(.sql(embed: "\(SQLColumn("username_key", table: User.schema)) LIKE \(bind: pattern) ESCAPE '!'"))
+            .filter(\.$id != userID)
+        let blocked = try await Block.counterparts(of: userID, on: req.db)
+        if !blocked.isEmpty {
+            query = query.filter(\.$id !~ blocked)
+        }
+        return try await query
             .sort(\.$usernameKey)
-            .limit(50)
+            .limit(Self.searchLimit)
             .all()
-        return try candidates
-            .filter { $0.usernameKey.hasPrefix(prefix) && $0.id != user.id }
-            .prefix(Self.searchLimit)
             .map { try $0.summary() }
     }
 
@@ -88,6 +95,9 @@ struct DevicesController: RouteCollection {
         devices.delete(":token", use: unregister)
     }
 
+    /// Devices per player. Registering another forgets the one registered longest ago.
+    static let maxDevicesPerPlayer = 10
+
     @Sendable
     func register(req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
@@ -98,15 +108,26 @@ struct DevicesController: RouteCollection {
         }
 
         let userID = try user.requireID()
+        let sessionID = req.auth.get(UserToken.self)?.id
         let db = req.db
         try await services.writeLock.withLock {
-            // A device belongs to whoever signed in on it most recently.
-            if let existing = try await Device.query(on: db).filter(\.$token == token).first() {
-                existing.$user.id = userID
-                existing.environment = registration.environment.rawValue
-                try await existing.save(on: db)
-            } else {
-                try await Device(userID: userID, token: token, environment: registration.environment).save(on: db)
+            // A device belongs to whoever signed in on it most recently, through that session.
+            let device = try await Device.query(on: db).filter(\.$token == token).first() ?? Device()
+            device.$user.id = userID
+            device.$session.id = sessionID
+            device.token = token
+            device.environment = registration.environment.rawValue
+            // Saved even when nothing changed, so `updatedAt` records the latest registration.
+            device.updatedAt = Date()
+            try await device.save(on: db)
+
+            let stale = try await Device.query(on: db)
+                .filter(\.$user.$id == userID)
+                .sort(\.$updatedAt, .descending)
+                .all(\.$id)
+                .dropFirst(Self.maxDevicesPerPlayer)
+            if !stale.isEmpty {
+                try await Device.query(on: db).filter(\.$id ~~ stale).delete()
             }
         }
         return .noContent

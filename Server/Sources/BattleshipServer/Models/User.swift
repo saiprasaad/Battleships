@@ -10,6 +10,7 @@ final class User: Model, Authenticatable, @unchecked Sendable {
     @Field(key: "username") var username: String
     /// Lower-cased, for case-insensitive uniqueness and lookups.
     @Field(key: "username_key") var usernameKey: String
+    /// A bcrypt hash, or ``noPassword`` for players who sign in with Apple or Google.
     @Field(key: "password_hash") var passwordHash: String
     @Field(key: "rating") var rating: Int
     @Field(key: "wins") var wins: Int
@@ -25,6 +26,15 @@ final class User: Model, Authenticatable, @unchecked Sendable {
         self.rating = CredentialPolicy.startingRating
         self.wins = 0
         self.losses = 0
+    }
+
+    /// Stored in place of a hash for players without a password. It isn't a bcrypt hash, so no
+    /// password can match it, and sign-in rejects these players before checking anything. (A marker
+    /// rather than NULL: SQLite can't relax the column's NOT NULL without rebuilding the users table.)
+    static let noPassword = "!"
+
+    var hasPassword: Bool {
+        passwordHash != Self.noPassword
     }
 
     var stats: PlayerStats {
@@ -69,6 +79,16 @@ final class UserToken: Model, Authenticatable, @unchecked Sendable {
     static func hash(_ token: String) -> String {
         SHA256.hash(data: Data(token.utf8)).hexString
     }
+
+    /// Starts a session for `user` and returns its bearer token, clearing away everyone's expired
+    /// sessions while it's there (devices they registered go with them, ON DELETE CASCADE). Call it
+    /// under the write lock.
+    static func startSession(for user: User, lifetime: TimeInterval, on db: any Database) async throws -> String {
+        try await UserToken.query(on: db).filter(\.$expiresAt < Date()).delete()
+        let (token, hash) = generate()
+        try await UserToken(userID: try user.requireID(), tokenHash: hash, expiresAt: Date().addingTimeInterval(lifetime)).save(on: db)
+        return token
+    }
 }
 
 final class Device: Model, @unchecked Sendable {
@@ -76,6 +96,10 @@ final class Device: Model, @unchecked Sendable {
 
     @ID(key: .id) var id: UUID?
     @Parent(key: "user_id") var user: User
+    /// The session that registered the device. Notifications stop when it expires, and signing out
+    /// of it forgets the device. `nil` for devices registered before sessions were recorded; those
+    /// keep getting notifications until the app registers them again (it does on every launch).
+    @OptionalParent(key: "session_id") var session: UserToken?
     /// Hex-encoded APNs device token.
     @Field(key: "token") var token: String
     @Field(key: "environment") var environment: String
@@ -83,8 +107,9 @@ final class Device: Model, @unchecked Sendable {
 
     init() {}
 
-    init(userID: UUID, token: String, environment: PushEnvironment) {
+    init(userID: UUID, sessionID: UUID?, token: String, environment: PushEnvironment) {
         self.$user.id = userID
+        self.$session.id = sessionID
         self.token = token
         self.environment = environment.rawValue
     }

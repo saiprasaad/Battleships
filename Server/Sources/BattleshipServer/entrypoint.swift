@@ -11,6 +11,11 @@ enum Entrypoint {
         do {
             try await configure(app)
             try await app.execute()
+        } catch let error as ConfigurationError {
+            // Already explained in the log; a crash report would only bury it.
+            app.logger.report(error: error)
+            try? await app.asyncShutdown()
+            exit(1)
         } catch {
             app.logger.report(error: error)
             try? await app.asyncShutdown()

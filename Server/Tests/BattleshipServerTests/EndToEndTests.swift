@@ -206,23 +206,6 @@ final class EndToEndTests: ServerTestCase {
         #endif
     }
 
-    private func openEventSocket(for client: APIClient) async throws -> SocketEvents {
-        let request = try XCTUnwrap(client.eventsRequest())
-        let collector = SocketEvents()
-        var headers = HTTPHeaders()
-        for (name, value) in request.allHTTPHeaderFields ?? [:] {
-            headers.add(name: name, value: value)
-        }
-        try await WebSocket.connect(
-            to: try XCTUnwrap(request.url?.absoluteString),
-            headers: headers,
-            on: app.eventLoopGroup
-        ) { socket in
-            collector.attach(socket)
-        }.get()
-        return collector
-    }
-
     func testClaimingVictoryWhenTheOpponentRunsOutOfTime() async throws {
         let baseURL = try await startServer()
         let alice = try await signedInClient("alice", baseURL: baseURL)
@@ -245,21 +228,18 @@ final class EndToEndTests: ServerTestCase {
     }
 
     func testClaimedVictoriesCountAsWins() async throws {
-        // A zero-hour limit means the waiting player can claim straight away.
-        try await app.asyncShutdown()
-        setenv("TURN_TIME_LIMIT_HOURS", "0", 1)
-        defer { unsetenv("TURN_TIME_LIMIT_HOURS") }
-        app = try await Application.make(.testing)
-        try await configure(app, pushService: push)
-
         let baseURL = try await startServer()
         let alice = try await signedInClient("alice", baseURL: baseURL)
         let bob = try await signedInClient("bob", baseURL: baseURL)
         try await bob.registerDevice(DeviceRegistration(token: String(repeating: "e", count: 64), environment: .sandbox))
-        let game = try await alice.createGame(CreateGameRequest(mode: .quick, fleet: Rules.quick.randomFleet(), opponent: "bob"))
-        _ = try await bob.acceptChallenge(gameID: game.id, fleet: Rules.quick.randomFleet())
+        let game = try await alice.createGame(CreateGameRequest(mode: .classic, fleet: Fleets.topLeft, opponent: "bob"))
+        _ = try await bob.acceptChallenge(gameID: game.id, fleet: Fleets.bottomRight)
         _ = try await alice.fire(gameID: game.id, at: Coordinate("A1")!)
+        _ = try await bob.fire(gameID: game.id, at: Coordinate("J1")!)
+        _ = try await alice.fire(gameID: game.id, at: Coordinate("A2")!)
 
+        // Bob then lets his three days run out.
+        try await backdateLastMove(of: game.id, by: 72 * 3600 + 1)
         let claimed = try await alice.claimVictory(gameID: game.id)
         XCTAssertEqual(claimed.summary.status, .finished)
         XCTAssertEqual(claimed.summary.outcome, Outcome(winner: .one, reason: .timeout))
@@ -282,6 +262,8 @@ final class EndToEndTests: ServerTestCase {
 
         let battle = try await alice.createGame(CreateGameRequest(mode: .classic, fleet: Fleets.topLeft, opponent: "bob"))
         _ = try await bob.acceptChallenge(gameID: battle.id, fleet: Fleets.bottomRight)
+        _ = try await alice.fire(gameID: battle.id, at: Coordinate("J1")!)
+        _ = try await bob.fire(gameID: battle.id, at: Coordinate("J1")!)
         let pendingChallenge = try await alice.createGame(CreateGameRequest(mode: .quick, fleet: Rules.quick.randomFleet(), opponent: "carol"))
         let carolsGames = try await carol.games()
         XCTAssertEqual(carolsGames.map(\.id), [pendingChallenge.id])
@@ -417,8 +399,10 @@ final class SocketEvents: @unchecked Sendable {
     private let lock = NSLock()
     private var events: [ServerEvent] = []
     private var closed = false
+    private var socket: WebSocket?
 
     func attach(_ socket: WebSocket) {
+        lock.withLock { self.socket = socket }
         socket.onText { [weak self] _, text in
             guard let event = try? APICoding.makeDecoder().decode(ServerEvent.self, from: Data(text.utf8)) else { return }
             self?.lock.withLock { self?.events.append(event) }
@@ -448,6 +432,14 @@ final class SocketEvents: @unchecked Sendable {
         }
         XCTFail("Timed out waiting for a server event", file: file, line: line)
         throw CancellationError()
+    }
+
+    var isClosed: Bool {
+        lock.withLock { closed }
+    }
+
+    func close() async {
+        try? await lock.withLock { socket }?.close()
     }
 
     func waitUntilClosed(timeout: TimeInterval = 5, file: StaticString = #filePath, line: UInt = #line) async throws {

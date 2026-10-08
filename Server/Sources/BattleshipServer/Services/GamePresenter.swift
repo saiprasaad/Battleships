@@ -20,7 +20,7 @@ struct GamePresenter: Sendable {
             opponentShipsRemaining: battle?.remainingShips(of: seat.opponent) ?? fleetSize,
             createdAt: game.createdAt ?? Date(),
             updatedAt: game.lastActivity,
-            turnDeadline: game.status == .active ? game.lastActivity.addingTimeInterval(turnTimeLimit) : nil
+            turnDeadline: game.status == .active ? Self.deadline(after: game.lastActivity, limit: turnTimeLimit) : nil
         )
     }
 
@@ -42,6 +42,12 @@ struct GamePresenter: Sendable {
             knownOpponentShips: knownOpponentShips,
             moves: game.moves
         )
+    }
+
+    /// Dates go over the wire in whole seconds, so round the deadline up: a client must never see
+    /// it as earlier than the server will enforce.
+    static func deadline(after lastActivity: Date, limit: TimeInterval) -> Date {
+        Date(timeIntervalSince1970: (lastActivity.timeIntervalSince1970 + limit).rounded(.up))
     }
 }
 

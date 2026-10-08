@@ -2,6 +2,7 @@ import BattleshipAPI
 import BattleshipClient
 import BattleshipCore
 @testable import BattleshipServer
+import FluentSQL
 import XCTVapor
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -19,26 +20,115 @@ actor RecordingPushService: PushService {
     var messages: [PushMessage] { deliveries.map(\.message) }
 }
 
-/// Boots a fresh app with an empty in-memory database for every test.
+/// Boots a fresh app with an empty database for every test: in-memory SQLite, or the Postgres
+/// database named by `TEST_DATABASE_URL` (which gets wiped).
 class ServerTestCase: XCTestCase {
     var app: Application!
     var push: RecordingPushService!
+    /// Signing keys for Sign in with Apple and Google, published by the tests.
+    var keySets: TestKeySets!
+    var appleTokens: RecordingAppleTokens!
     private var serverStarted = false
+    private var openSockets: [SocketEvents] = []
 
     override func setUp() async throws {
         try await super.setUp()
-        app = try await Application.make(.testing)
         push = RecordingPushService()
-        try await configure(app, pushService: push)
+        keySets = TestKeySets()
+        appleTokens = RecordingAppleTokens()
+        try await startApp()
     }
 
     override func tearDown() async throws {
-        if serverStarted {
-            await app.http.server.shared.shutdown()
-        }
-        try await app.asyncShutdown()
+        try await stopApp()
         app = nil
         try await super.tearDown()
+    }
+
+    private func startApp() async throws {
+        app = try await Application.make(.testing)
+        try await configure(app, pushService: push, keySets: keySets, appleTokens: appleTokens)
+        if case .postgres = app.appServices.settings.database, let sql = app.db as? any SQLDatabase {
+            // Every test shares the one Postgres database, so start from nothing.
+            try await sql.raw("DROP SCHEMA public CASCADE").run()
+            try await sql.raw("CREATE SCHEMA public").run()
+            try await app.autoMigrate()
+        }
+    }
+
+    private func stopApp() async throws {
+        // The server waits for open connections before it stops.
+        for socket in openSockets {
+            await socket.close()
+        }
+        openSockets = []
+        if serverStarted {
+            await app.http.server.shared.shutdown()
+            serverStarted = false
+        }
+        try await app.asyncShutdown()
+    }
+
+    /// Restarts the app, on an empty database, with `environment` set while it reads its settings.
+    func restartApp(environment: [String: String]) async throws {
+        try await stopApp()
+        for (name, value) in environment {
+            setenv(name, value, 1)
+        }
+        defer {
+            for name in environment.keys {
+                unsetenv(name)
+            }
+        }
+        try await startApp()
+    }
+
+    /// Registers `username` through the API.
+    @discardableResult
+    func register(_ username: String, password: String = "correct horse battery") async throws -> (token: String, id: UUID) {
+        var result: AuthResponse?
+        try await app.testable().test(.POST, "v1/auth/register", beforeRequest: { req in
+            try req.content.encode(Credentials(username: username, password: password))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .created, res.body.string)
+            result = try res.content.decode(AuthResponse.self)
+        })
+        let auth = try XCTUnwrap(result)
+        return (auth.token, auth.account.id)
+    }
+
+    func bearer(_ token: String) -> HTTPHeaders {
+        ["Authorization": "Bearer \(token)"]
+    }
+
+    /// Opens the realtime event stream as `client`'s session.
+    func openEventSocket(for client: APIClient) async throws -> SocketEvents {
+        let request = try XCTUnwrap(client.eventsRequest())
+        let collector = SocketEvents()
+        var headers = HTTPHeaders()
+        for (name, value) in request.allHTTPHeaderFields ?? [:] {
+            headers.add(name: name, value: value)
+        }
+        try await WebSocket.connect(
+            to: try XCTUnwrap(request.url?.absoluteString),
+            headers: headers,
+            on: app.eventLoopGroup
+        ) { socket in
+            collector.attach(socket)
+        }.get()
+        openSockets.append(collector)
+        return collector
+    }
+
+    /// Pretends the last move in a game happened `interval` earlier than it did.
+    func backdateLastMove(of gameID: UUID, by interval: TimeInterval) async throws {
+        let game = try await XCTUnwrapAsync(await GameRecord.find(gameID, on: app.db))
+        let sql = try XCTUnwrap(app.db as? any SQLDatabase)
+        // Straight to SQL: saving the model would stamp `updated_at` with the current time.
+        try await sql.update(GameRecord.schema)
+            .set("updated_at", to: game.lastActivity.addingTimeInterval(-interval))
+            .where("id", .equal, gameID)
+            .run()
     }
 
     /// Starts a real HTTP server on a free port, for tests that drive it with the app's own client.
@@ -125,4 +215,13 @@ extension XCTestCase {
             XCTFail("Unexpected error \(error)", file: file, line: line)
         }
     }
+}
+
+func XCTUnwrapAsync<T>(
+    _ expression: @autoclosure () async throws -> T?,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async throws -> T {
+    let value = try await expression()
+    return try XCTUnwrap(value, file: file, line: line)
 }

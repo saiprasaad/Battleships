@@ -15,9 +15,9 @@ final class GameRecord: Model, @unchecked Sendable {
     @OptionalParent(key: "player_one_id") var playerOne: User?
     /// The opponent: the challenged player, the matched player, or `nil` while matchmaking.
     @OptionalParent(key: "player_two_id") var playerTwo: User?
-    @Field(key: "fleet_one") var fleetOne: [ShipPlacement]
-    @OptionalField(key: "fleet_two") var fleetTwo: [ShipPlacement]?
-    @Field(key: "moves") var moves: [Move]
+    @Field(key: "fleet_one") var storedFleetOne: JSONColumn<[ShipPlacement]>
+    @OptionalField(key: "fleet_two") var storedFleetTwo: JSONColumn<[ShipPlacement]>?
+    @Field(key: "moves") var storedMoves: JSONColumn<[Move]>
     @OptionalField(key: "turn") var turn: Int?
     @OptionalField(key: "winner") var winner: Int?
     @OptionalField(key: "end_reason") var endReason: String?
@@ -34,6 +34,22 @@ final class GameRecord: Model, @unchecked Sendable {
         self.fleetOne = fleetOne
         self.fleetTwo = nil
         self.moves = []
+    }
+
+    var fleetOne: [ShipPlacement] {
+        get { storedFleetOne.value }
+        set { storedFleetOne = JSONColumn(newValue) }
+    }
+
+    /// `nil` until the opponent has placed their fleet.
+    var fleetTwo: [ShipPlacement]? {
+        get { storedFleetTwo?.value }
+        set { storedFleetTwo = newValue.map(JSONColumn.init) }
+    }
+
+    var moves: [Move] {
+        get { storedMoves.value }
+        set { storedMoves = JSONColumn(newValue) }
     }
 
     var mode: GameMode {
@@ -73,6 +89,13 @@ final class GameRecord: Model, @unchecked Sendable {
     func battle() throws -> Battle? {
         guard let fleetTwo, status == .active || status == .finished else { return nil }
         return try Battle(mode: mode, fleetOne: fleetOne, fleetTwo: fleetTwo, replaying: moves, forfeit: outcome)
+    }
+
+    /// Whether the result counts toward ratings and win/loss records: only once both players have
+    /// fired. A battle resigned, abandoned or won on time before that proves nothing, and counting
+    /// it would let a second account feed wins and rating points to the first.
+    var isRated: Bool {
+        Set(moves.map(\.player)).count == Player.allCases.count
     }
 
     /// When the last move (or the start of the battle) happened.

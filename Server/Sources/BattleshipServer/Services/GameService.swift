@@ -12,6 +12,10 @@ struct GameService: Sendable {
     let settings: ServerSettings
     let writeLock: AsyncLock
     let notifier: Notifier
+    /// New games per player, since every challenge sends a push notification.
+    let newGameLimiter: RateLimiter
+    /// Revokes Sign in with Apple access when an account is deleted. `nil` without the Apple key.
+    let appleTokens: (any AppleTokenClient)?
 
     // MARK: Reading
 
@@ -44,6 +48,9 @@ struct GameService: Sendable {
     func create(_ request: CreateGameRequest, by user: User, on db: any Database) async throws -> GameDetail {
         try validate(request.fleet, for: request.mode)
         let opponentName = request.opponent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard await newGameLimiter.consume(try user.requireID().uuidString) else {
+            throw AppError.tooManyNewGames
+        }
 
         return try await writeLock.withLock {
             try await enforceOpenGameLimit(for: user, on: db)
@@ -66,6 +73,34 @@ struct GameService: Sendable {
             .first()
         else { throw AppError.playerNotFound }
         guard opponent.id != user.id else { throw AppError.cannotChallengeYourself }
+        let userID = try user.requireID()
+        let opponentID = try opponent.requireID()
+        let blocks = try await Block.query(on: db)
+            .group(.or) { either in
+                either.group(.and) { $0.filter(\.$blocker.$id == userID).filter(\.$blocked.$id == opponentID) }
+                either.group(.and) { $0.filter(\.$blocker.$id == opponentID).filter(\.$blocked.$id == userID) }
+            }
+            .all()
+        if blocks.contains(where: { $0.$blocker.id == userID }) {
+            throw AppError.playerBlocked
+        }
+        // Someone who blocked you looks the same as someone who doesn't exist.
+        guard blocks.isEmpty else { throw AppError.playerNotFound }
+
+        // One unanswered challenge between two players at a time, whichever of them sent it.
+        if let pending = try await invitations(between: userID, and: opponentID, on: db).first() {
+            throw pending.$playerOne.id == userID
+                ? AppError.challengeAlreadySent(to: opponent.username)
+                : AppError.challengeAlreadyReceived(from: opponent.username)
+        }
+        // Each one pushes a notification, so nobody gets buried in them.
+        let waiting = try await GameRecord.query(on: db)
+            .filter(\.$statusRaw == GameStatus.invited.rawValue)
+            .filter(\.$playerTwo.$id == opponentID)
+            .count()
+        guard waiting < settings.maxPendingChallenges else {
+            throw AppError.tooManyPendingChallenges(for: opponent.username)
+        }
 
         let game = GameRecord(
             mode: mode,
@@ -86,14 +121,16 @@ struct GameService: Sendable {
     private func matchmake(mode: GameMode, fleet: [ShipPlacement], by user: User, on db: any Database) async throws -> GameDetail {
         let userID = try user.requireID()
 
-        // Pair with whoever has been waiting longest for this mode.
-        if let game = try await GameRecord.query(on: db)
+        // Pair with whoever has been waiting longest for this mode, never across a block.
+        var waiting = GameRecord.query(on: db)
             .filter(\.$statusRaw == GameStatus.matchmaking.rawValue)
             .filter(\.$modeRaw == mode.rawValue)
             .filter(\.$playerOne.$id != userID)
-            .sort(\.$createdAt, .ascending)
-            .with(\.$playerOne)
-            .first() {
+        let blocked = try await Block.counterparts(of: userID, on: db)
+        if !blocked.isEmpty {
+            waiting = waiting.filter(\.$playerOne.$id !~ blocked.map { Optional($0) })
+        }
+        if let game = try await longestWaitingOpponent(in: waiting, on: db) {
             game.$playerTwo.id = userID
             game.fleetTwo = fleet
             game.status = .active
@@ -112,6 +149,31 @@ struct GameService: Sendable {
         game.$playerTwo.value = .some(nil)
         await notifier.broadcast(game)
         return try notifier.presenter.detail(of: game, for: .one)
+    }
+
+    /// The waiting player moves first, so only pair with one who's likely still around: they joined
+    /// the queue recently, or they've been online since then. Anyone else stays queued until they
+    /// come back.
+    private func longestWaitingOpponent(in waiting: QueryBuilder<GameRecord>, on db: any Database) async throws -> GameRecord? {
+        let cutoff = Date().addingTimeInterval(-settings.matchmakingFreshness)
+        let stale = try await waiting.copy()
+            .filter(\.$createdAt < cutoff)
+            .sort(\.$createdAt, .ascending)
+            .field(\.$id).field(\.$playerOne.$id)
+            .limit(200)
+            .all()
+        for candidate in stale {
+            guard let owner = candidate.$playerOne.id, await notifier.hub.isActive(owner, since: cutoff) else { continue }
+            return try await GameRecord.query(on: db)
+                .filter(\.$id == candidate.requireID())
+                .with(\.$playerOne)
+                .first()
+        }
+        return try await waiting.copy()
+            .filter(\.$createdAt >= cutoff)
+            .sort(\.$createdAt, .ascending)
+            .with(\.$playerOne)
+            .first()
     }
 
     // MARK: Answering challenges
@@ -232,12 +294,50 @@ struct GameService: Sendable {
         }
     }
 
+    // MARK: Blocking
+
+    /// Blocks `playerID` for `user`, withdrawing any challenge between them that hasn't been answered.
+    func block(_ playerID: UUID, by user: User, on db: any Database) async throws {
+        let userID = try user.requireID()
+        guard playerID != userID else { throw AppError.cannotBlockYourself }
+        try await writeLock.withLock {
+            guard try await User.find(playerID, on: db) != nil else { throw AppError.playerNotFound }
+            let invites = try await invitations(between: userID, and: playerID, on: db).all()
+            try await db.transaction { tx in
+                let existing = try await Block.query(on: tx)
+                    .filter(\.$blocker.$id == userID)
+                    .filter(\.$blocked.$id == playerID)
+                    .first()
+                if existing == nil {
+                    try await Block(blockerID: userID, blockedID: playerID).save(on: tx)
+                }
+                for invite in invites {
+                    try await invite.delete(on: tx)
+                }
+            }
+            for invite in invites {
+                await notifier.removed(try invite.requireID(), reason: .cancelled, notifying: [userID, playerID])
+            }
+        }
+    }
+
+    func unblock(_ playerID: UUID, by user: User, on db: any Database) async throws {
+        let userID = try user.requireID()
+        try await writeLock.withLock {
+            try await Block.query(on: db)
+                .filter(\.$blocker.$id == userID)
+                .filter(\.$blocked.$id == playerID)
+                .delete()
+        }
+    }
+
     // MARK: Accounts
 
     /// Removes a player: games that haven't started are withdrawn, battles in progress are resigned
     /// (their opponents win), and finished games stay in the opponents' history as "former player".
     func deleteAccount(of user: User, on db: any Database) async throws {
         let userID = try user.requireID()
+        await revokeAppleAccess(of: userID, on: db)
         try await writeLock.withLock {
             let games = try await participating(userID, on: db).all()
 
@@ -265,6 +365,12 @@ struct GameService: Sendable {
                 // become empty (ON DELETE SET NULL). Delete explicitly too, for databases without FKs.
                 try await UserToken.query(on: tx).filter(\.$user.$id == userID).delete()
                 try await Device.query(on: tx).filter(\.$user.$id == userID).delete()
+                try await ExternalIdentity.query(on: tx).filter(\.$user.$id == userID).delete()
+                try await Block.query(on: tx)
+                    .group(.or) { $0.filter(\.$blocker.$id == userID).filter(\.$blocked.$id == userID) }
+                    .delete()
+                try await Report.query(on: tx).filter(\.$reported.$id == userID).delete()
+                try await Report.query(on: tx).filter(\.$reporter.$id == userID).delete()
                 try await user.delete(on: tx)
                 return (removed, resigned)
             }
@@ -283,7 +389,41 @@ struct GameService: Sendable {
         }
     }
 
+    /// Apple requires apps to revoke their access to an Apple ID when its account is deleted. Best
+    /// effort, and network I/O, so it happens before (never inside) the write lock.
+    private func revokeAppleAccess(of userID: UUID, on db: any Database) async {
+        guard let appleTokens else { return }
+        let refreshTokens: [String]
+        do {
+            refreshTokens = try await ExternalIdentity.query(on: db)
+                .filter(\.$user.$id == userID)
+                .filter(\.$providerRaw == IdentityProvider.apple.rawValue)
+                .all()
+                .compactMap(\.appleRefreshToken)
+        } catch {
+            notifier.logger.error("Could not look up Sign in with Apple tokens to revoke: \(error)")
+            return
+        }
+        for refreshToken in refreshTokens {
+            do {
+                try await appleTokens.revoke(refreshToken: refreshToken)
+            } catch {
+                notifier.logger.error("Could not revoke Sign in with Apple access for a deleted account: \(error)")
+            }
+        }
+    }
+
     // MARK: Helpers
+
+    /// Unanswered challenges between two players, in either direction.
+    private func invitations(between userID: UUID, and otherID: UUID, on db: any Database) -> QueryBuilder<GameRecord> {
+        GameRecord.query(on: db)
+            .filter(\.$statusRaw == GameStatus.invited.rawValue)
+            .group(.or) { either in
+                either.group(.and) { $0.filter(\.$playerOne.$id == userID).filter(\.$playerTwo.$id == otherID) }
+                either.group(.and) { $0.filter(\.$playerOne.$id == otherID).filter(\.$playerTwo.$id == userID) }
+            }
+    }
 
     private func participating(_ userID: UUID, on db: any Database) -> QueryBuilder<GameRecord> {
         GameRecord.query(on: db)
@@ -343,7 +483,8 @@ struct GameService: Sendable {
     }
 
     private func recordResult(of game: GameRecord, on db: any Database) async throws {
-        guard let outcome = game.outcome,
+        guard game.isRated,
+              let outcome = game.outcome,
               let winnerID = game.userID(at: outcome.winner),
               let loserID = game.userID(at: outcome.loser),
               let winner = try await User.find(winnerID, on: db),

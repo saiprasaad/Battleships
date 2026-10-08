@@ -83,27 +83,21 @@ struct EventsController: RouteCollection {
 
     func boot(routes: any RoutesBuilder) throws {
         let hub = services.hub
-        routes.webSocket(
-            "events",
-            shouldUpgrade: { @Sendable (req: Request) async throws -> HTTPHeaders? in
-                _ = try req.auth.require(User.self)
-                return [:]
-            },
-            onUpgrade: { @Sendable (req: Request, socket: WebSocket) async in
-                guard let userID = req.auth.get(User.self)?.id else {
-                    try? await socket.close(code: .policyViolation)
-                    return
-                }
+        routes.get("events") { req async throws -> Response in
+            let userID = try req.auth.require(User.self).requireID()
+            let tokenID = req.auth.get(UserToken.self)?.id
+            let response = Response(status: .switchingProtocols)
+            response.upgrader = EventStreamUpgrader { socket, channel in
                 // Pings detect connections that died without closing (e.g. a phone losing signal).
                 socket.pingInterval = .seconds(25)
-                await hub.register(socket, userID: userID, tokenID: req.auth.get(UserToken.self)?.id)
-                socket.onClose.whenComplete { _ in
-                    Task { await hub.unregister(socket, userID: userID) }
-                }
-                if let hello = try? APICoding.makeEncoder().encode(ServerEvent.hello) {
-                    try? await socket.send(String(decoding: hello, as: UTF8.self))
+                Task {
+                    await hub.register(socket, channel: channel, userID: userID, tokenID: tokenID)
+                    socket.onClose.whenComplete { _ in
+                        Task { await hub.unregister(socket, userID: userID) }
+                    }
                 }
             }
-        )
+            return response
+        }
     }
 }

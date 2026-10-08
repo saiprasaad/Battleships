@@ -5,22 +5,6 @@ import XCTVapor
 
 /// Request-level behaviour: error format, authorization, rate limiting, information hiding.
 final class HTTPBehaviorTests: ServerTestCase {
-    private func register(_ username: String) async throws -> (token: String, id: UUID) {
-        var result: AuthResponse?
-        try await app.testable().test(.POST, "v1/auth/register", beforeRequest: { req in
-            try req.content.encode(Credentials(username: username, password: "correct horse battery"))
-        }, afterResponse: { res async throws in
-            XCTAssertEqual(res.status, .created)
-            result = try res.content.decode(AuthResponse.self)
-        })
-        let auth = try XCTUnwrap(result)
-        return (auth.token, auth.account.id)
-    }
-
-    private func bearer(_ token: String) -> HTTPHeaders {
-        ["Authorization": "Bearer \(token)"]
-    }
-
     func testHealthCheck() async throws {
         try await app.testable().test(.GET, "health") { res async in
             XCTAssertEqual(res.status, .ok)
@@ -160,11 +144,7 @@ final class HTTPBehaviorTests: ServerTestCase {
         XCTAssertTrue(later, "allowance refills over time")
 
         // And it is wired up in front of sign-in.
-        try await app.asyncShutdown()
-        setenv("AUTH_RATE_LIMIT_PER_MINUTE", "2", 1)
-        defer { unsetenv("AUTH_RATE_LIMIT_PER_MINUTE") }
-        app = try await Application.make(.testing)
-        try await configure(app, pushService: push)
+        try await restartApp(environment: ["AUTH_RATE_LIMIT_PER_MINUTE": "2"])
 
         var statuses: [HTTPStatus] = []
         for _ in 0..<3 {

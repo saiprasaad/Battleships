@@ -30,6 +30,39 @@ jobs:
       - name: Server tests
         run: swift test --package-path Server
 
+  server-postgres:
+    name: Server tests on Postgres (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: swift:6.3-noble
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: battleships
+          POSTGRES_PASSWORD: battleships
+          POSTGRES_DB: battleships_test
+        options: >-
+          --health-cmd "pg_isready -U battleships -d battleships_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache SwiftPM builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            BattleshipKit/.build
+            Server/.build
+          key: linux-swiftpm-${{ hashFiles('Server/Package.resolved', 'Server/Package.swift', 'BattleshipKit/Package.swift') }}
+          restore-keys: linux-swiftpm-
+      # The tests wipe this database before each one (see ServerTestCase).
+      - name: Server tests
+        env:
+          TEST_DATABASE_URL: postgres://battleships:battleships@postgres:5432/battleships_test
+        run: swift test --package-path Server
+
   server-macos:
     name: Server tests (macOS)
     runs-on: macos-latest

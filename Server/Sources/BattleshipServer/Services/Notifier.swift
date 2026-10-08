@@ -32,14 +32,14 @@ struct Notifier: Sendable {
         }
     }
 
-    /// Pushes `message` to every device `userID` has registered. Runs in the background so a slow
-    /// APNs round trip never holds up a move; tokens Apple rejects are forgotten.
+    /// Pushes `message` to every device `userID` is signed in on. Runs in the background, outside the
+    /// write lock, so a slow APNs round trip never holds up a move; tokens Apple rejects are forgotten.
     func push(_ message: PushMessage, to userID: UUID?) {
         guard let userID else { return }
         let push = push, writeLock = writeLock, database = database, logger = logger
         Task {
             do {
-                let devices = try await Device.query(on: database()).filter(\.$user.$id == userID).all()
+                let devices = try await Self.signedInDevices(of: userID, on: database())
                 guard !devices.isEmpty else { return }
                 let targets = devices.map { PushTarget(token: $0.token, environment: $0.pushEnvironment) }
                 let invalid = await push.send(message, to: targets)
@@ -51,6 +51,18 @@ struct Notifier: Sendable {
                 logger.warning("Push notification failed: \(error)")
             }
         }
+    }
+
+    /// The player's devices whose session is still live. A device registered before sessions were
+    /// recorded has none, and counts until the app registers it again.
+    static func signedInDevices(of userID: UUID, on db: any Database) async throws -> [Device] {
+        let devices = try await Device.query(on: db).filter(\.$user.$id == userID).all()
+        let sessionIDs = devices.compactMap { $0.$session.id }
+        let live: Set<UUID> = sessionIDs.isEmpty ? [] : Set(try await UserToken.query(on: db)
+            .filter(\.$id ~~ sessionIDs)
+            .filter(\.$expiresAt > Date())
+            .all(\.$id))
+        return devices.filter { device in device.$session.id.map(live.contains) ?? true }
     }
 }
 
