@@ -11,6 +11,9 @@ struct BattleControllerTests {
         let (app, feedback) = makeTestApp()
         let match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
         let controller = BattleController(route: .solo(match.id), app: app)
+        // Splashes and flames normally fade after a second; keep them so they can be checked.
+        controller.impactDuration = .seconds(60)
+        controller.computerPause = 0...0
         await controller.load()
 
         #expect(controller.phase == .battle)
@@ -26,15 +29,7 @@ struct BattleControllerTests {
         #expect(controller.canFire)
         #expect(feedback.events.last == .aim)
 
-        let firing = Task { await controller.fire() }
-        // The player's shell lands at once. Its splash or flame only lasts a moment, so look for it
-        // before the computer's reply rather than after.
-        let landed = { controller.effects.contains { $0.board == .target && $0.coordinate == target } }
-        for _ in 0..<100 where !landed() {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(landed())
-        await firing.value
+        await controller.fire()
 
         // The player's shot, then the computer's reply.
         let played = try #require(app.solo.match(match.id))
@@ -44,6 +39,7 @@ struct BattleControllerTests {
         #expect(controller.isMyTurn)
         #expect(feedback.events.contains(.fire))
         #expect(feedback.events.contains(.incoming), "the computer's guns are heard")
+        #expect(controller.effects.contains { $0.board == .target && $0.coordinate == target })
         #expect(controller.effects.contains { $0.board == .home })
         #expect(controller.announcement != nil, "the computer's shot is announced")
     }
@@ -65,12 +61,13 @@ struct BattleControllerTests {
         let (app, _) = makeTestApp()
         let match = try app.solo.start(mode: .classic, difficulty: .medium, fleet: Rules.classic.randomFleet())
         let controller = BattleController(route: .solo(match.id), app: app)
+        controller.computerPause = 0...0
         await controller.load()
 
         controller.tapTarget(Coordinate("E5")!)
         controller.tapTarget(Coordinate("E5")!)
         // Firing happens in a task; give it (and the computer's reply) time to land.
-        for _ in 0..<40 where (app.solo.match(match.id)?.battle.moves.count ?? 0) < 2 {
+        for _ in 0..<200 where (app.solo.match(match.id)?.battle.moves.count ?? 0) < 2 {
             try await Task.sleep(for: .milliseconds(100))
         }
         #expect(app.solo.match(match.id)?.battle.moves.first?.target == Coordinate("E5"))
@@ -132,8 +129,8 @@ struct BattleControllerTests {
         let controller = BattleController(route: .solo(match.id), app: app)
         await controller.load()
         #expect(feedback.events.contains(.defeat))
-        for _ in 0..<30 where !controller.showsOutcome {
-            try await Task.sleep(for: .milliseconds(100))
+        for _ in 0..<200 where !controller.showsOutcome {
+            try await Task.sleep(for: .milliseconds(50))
         }
         #expect(controller.showsOutcome)
 
@@ -146,22 +143,26 @@ struct BattleControllerTests {
         let (app, feedback) = makeTestApp()
         let match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
         let controller = BattleController(route: .solo(match.id), app: app)
+        // A computer that thinks for a minute, so the player is sure to leave before it fires.
+        controller.computerPause = 60_000...60_000
         await controller.load()
 
         controller.tapTarget(Coordinate("A1")!)
         let firing = Task { await controller.fire() }
-        for _ in 0..<50 where !controller.isComputerThinking {
+        for _ in 0..<1_000 where !controller.isComputerThinking {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(controller.isComputerThinking)
         controller.viewDidDisappear()
         await firing.value
 
+        #expect(!controller.isComputerThinking)
         #expect(app.solo.match(match.id)?.battle.moves.count == 1, "the computer holds its fire")
         #expect(!feedback.events.contains(.incoming))
 
         // Back on the screen, the computer takes its turn.
         let reopened = BattleController(route: .solo(match.id), app: app)
+        reopened.computerPause = 0...0
         reopened.viewDidAppear()
         await reopened.load()
         #expect(app.solo.match(match.id)?.battle.moves.count == 2)
@@ -171,19 +172,21 @@ struct BattleControllerTests {
         let (app, _) = makeTestApp()
         let match = try app.solo.start(mode: .quick, difficulty: .easy, fleet: Rules.quick.randomFleet())
         let controller = BattleController(route: .solo(match.id), app: app)
+        controller.computerPause = 60_000...60_000
         await controller.load()
 
         let occupied = Set(match.battle.fleet(of: ComputerMatch.computer).flatMap(\.cells))
         let water = try #require(Rules.quick.allCoordinates.first { !occupied.contains($0) })
         controller.tapTarget(water)
         let firing = Task { await controller.fire() }
-        // Before the computer replies, only the player's miss has been announced.
-        for _ in 0..<50 where controller.spokenAnnouncement == nil {
+        // While the computer is still taking aim, only the player's miss has been announced.
+        for _ in 0..<1_000 where !controller.isComputerThinking {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(controller.spokenAnnouncement?.message == "Miss at \(water).")
         #expect(controller.spokenAnnouncement?.source == .player)
         #expect(controller.announcement == nil, "a miss gets no banner")
+        controller.viewDidDisappear()
         await firing.value
     }
 

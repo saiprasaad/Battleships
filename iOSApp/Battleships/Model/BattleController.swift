@@ -86,6 +86,10 @@ final class BattleController {
     @ObservationIgnored private var isOnScreen = true
     /// The computer's reply to the player's shot, called off if the player leaves.
     @ObservationIgnored private var computerTurn: Task<Void, Never>?
+    /// How long the computer seems to think before it fires, in milliseconds. Tests change it.
+    @ObservationIgnored var computerPause: ClosedRange<Int> = 650...1100
+    /// How long a shell's splash or flame stays on the board. Tests change it.
+    @ObservationIgnored var impactDuration: Duration = .milliseconds(1200)
 
     init(route: GameRoute, app: AppModel) {
         self.route = route
@@ -409,7 +413,7 @@ final class BattleController {
         isComputerThinking = true
         // A short pause so the player can watch the shot land, as if the computer were thinking.
         do {
-            try await Task.sleep(for: .milliseconds(Int.random(in: 650...1100)))
+            try await Task.sleep(for: .milliseconds(Int.random(in: computerPause)))
         } catch {
             // The player left. The computer fires when the game is opened again.
             isComputerThinking = false
@@ -457,8 +461,9 @@ final class BattleController {
         let isMine = move.player == perspective.me
         let effect = ImpactEffect(board: isMine ? .target : .home, coordinate: move.target, isHit: move.result.isHit)
         effects.append(effect)
+        let duration = impactDuration
         Task {
-            try? await Task.sleep(for: .milliseconds(1200))
+            try? await Task.sleep(for: duration)
             effects.removeAll { $0.id == effect.id }
         }
 
