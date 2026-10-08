@@ -53,7 +53,7 @@ struct ComputerOpponentTests {
         let easy = try average(.easy)
         let medium = try average(.medium)
         let hard = try average(.hard)
-        // Random play needs ~95 shots on average; hunt/target ~65; probability density ~50.
+        // Over many games: random play averages ~96 shots, hunt/target ~51, probability density ~45.
         #expect(easy > 85)
         #expect(medium < easy - 15)
         #expect(hard < medium)

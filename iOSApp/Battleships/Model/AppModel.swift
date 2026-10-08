@@ -34,12 +34,13 @@ final class AppModel {
         tokenStorage: any TokenStorage,
         feedback: any FeedbackPlayer,
         soloDirectory: URL? = nil,
+        defaults: UserDefaults = .standard,
         urlSession: URLSession = .shared
     ) {
         self.settings = settings
         let api = APIClient(baseURL: settings.serverURL, session: urlSession)
         self.api = api
-        self.session = SessionStore(api: api, tokenStorage: tokenStorage)
+        self.session = SessionStore(api: api, tokenStorage: tokenStorage, defaults: defaults)
         self.online = OnlineGamesStore(api: api)
         self.solo = SoloGamesStore(directory: soloDirectory)
         self.feedback = feedback

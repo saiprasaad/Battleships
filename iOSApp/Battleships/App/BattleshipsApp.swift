@@ -10,7 +10,7 @@ struct BattleshipsApp: App {
             RootView()
                 .environment(appDelegate.model)
         }
-        .onChange(of: scenePhase) {
+        .onChange(of: scenePhase, initial: true) {
             switch scenePhase {
             case .active:
                 appDelegate.model.appDidBecomeActive()

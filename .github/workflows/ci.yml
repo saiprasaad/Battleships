@@ -80,6 +80,9 @@ jobs:
           ')"
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
       - name: Build and test
+        env:
+          # Lets the screenshot test render the main screens (see BattleshipsTests/ScreenshotTests.swift).
+          TEST_RUNNER_SCREENSHOT_DIR: ${{ github.workspace }}/build/screenshots
         run: |
           set -o pipefail
           xcodebuild test \
@@ -89,6 +92,13 @@ jobs:
             -resultBundlePath build/Battleships.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             -quiet
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: build/screenshots
+          if-no-files-found: ignore
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4
