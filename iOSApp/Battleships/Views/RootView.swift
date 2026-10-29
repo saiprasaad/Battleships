@@ -24,6 +24,15 @@ struct RootView: View {
                 .tabItem { Label("Profile", systemImage: "person.crop.circle") }
                 .tag(Tab.profile)
         }
+        // Toasts float over every tab; sheets host their own, as they present above this overlay.
+        .toastHost()
+        .overlay(alignment: .topTrailing) {
+            if app.settings.showsPerformanceOverlay {
+                MotionDebugOverlay()
+                    .padding(.top, 4)
+                    .padding(.trailing, 8)
+            }
+        }
         // Every screen and sheet reads how much it may move from here.
         .motionPolicy(settings: app.settings)
         .preferredColorScheme(.dark)

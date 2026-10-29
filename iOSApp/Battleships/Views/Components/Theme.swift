@@ -62,17 +62,18 @@ extension View {
         #endif
     }
 
-    /// The style for a screen's main action: Liquid Glass on iOS 26, bordered-prominent before.
+    /// The style for a screen's main action: Liquid Glass on iOS 26, a capsule with depth and recoil
+    /// (`DepthButtonStyle`, filled with the view's tint) before.
     @ViewBuilder
     func primaryActionStyle() -> some View {
         #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             buttonStyle(.glassProminent)
         } else {
-            buttonStyle(.borderedProminent)
+            buttonStyle(DepthButtonStyle(followsViewTint: true))
         }
         #else
-        buttonStyle(.borderedProminent)
+        buttonStyle(DepthButtonStyle(followsViewTint: true))
         #endif
     }
 

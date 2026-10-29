@@ -130,9 +130,9 @@ struct FXClockTests {
 }
 
 @MainActor
-@Suite("Cue sheet")
-struct CueSheetTests {
-    /// What a sheet did, in order.
+@Suite("Beat scheduler")
+struct BeatSchedulerTests {
+    /// What a scheduler did, in order.
     @MainActor
     final class Log {
         var entries: [String] = []
@@ -141,7 +141,7 @@ struct CueSheetTests {
 
     private struct TimedOut: Error {}
 
-    /// Lets the sheet's task run until `condition` holds, failing after about a second.
+    /// Lets the scheduler's task run until `condition` holds, failing after about a second.
     private func waitUntil(_ condition: @MainActor () -> Bool) async throws {
         for _ in 0..<200 {
             if condition() { return }
@@ -152,10 +152,10 @@ struct CueSheetTests {
 
     @Test func cuesFireInOrderThenFinish() async throws {
         let log = Log()
-        let sheet = CueSheet([
-            CueSheet.Cue(at: 0.05) { log.entries.append("second") },
-            CueSheet.Cue(at: 0) { log.entries.append("first") },
-            CueSheet.Cue(at: 0.1) { log.entries.append("third") },
+        let sheet = BeatScheduler([
+            BeatScheduler.Cue(at: 0.05) { log.entries.append("second") },
+            BeatScheduler.Cue(at: 0) { log.entries.append("first") },
+            BeatScheduler.Cue(at: 0.1) { log.entries.append("third") },
         ], onFinish: { log.finished = true })
         #expect(!sheet.isPlaying)
         sheet.play()
@@ -168,10 +168,10 @@ struct CueSheetTests {
 
     @Test func cuesAtTheSameOffsetKeepTheirOrder() async throws {
         let log = Log()
-        let sheet = CueSheet([
-            CueSheet.Cue(at: 0.02) { log.entries.append("a") },
-            CueSheet.Cue(at: 0.02) { log.entries.append("b") },
-            CueSheet.Cue(at: 0.02) { log.entries.append("c") },
+        let sheet = BeatScheduler([
+            BeatScheduler.Cue(at: 0.02) { log.entries.append("a") },
+            BeatScheduler.Cue(at: 0.02) { log.entries.append("b") },
+            BeatScheduler.Cue(at: 0.02) { log.entries.append("c") },
         ], onFinish: { log.finished = true })
         sheet.play()
         try await waitUntil { log.finished }
@@ -180,10 +180,10 @@ struct CueSheetTests {
 
     @Test func skipRunsTheRestAtOnce() async throws {
         let log = Log()
-        let sheet = CueSheet([
-            CueSheet.Cue(at: 0) { log.entries.append("a") },
-            CueSheet.Cue(at: 10) { log.entries.append("b") },
-            CueSheet.Cue(at: 20) { log.entries.append("c") },
+        let sheet = BeatScheduler([
+            BeatScheduler.Cue(at: 0) { log.entries.append("a") },
+            BeatScheduler.Cue(at: 10) { log.entries.append("b") },
+            BeatScheduler.Cue(at: 20) { log.entries.append("c") },
         ], onFinish: { log.finished = true })
         sheet.play()
         try await waitUntil { log.entries.count == 1 }
@@ -196,14 +196,14 @@ struct CueSheetTests {
         try await Task.sleep(for: .milliseconds(50))
         #expect(log.entries.count == 3)
         sheet.skip()
-        #expect(log.entries.count == 3, "skipping a finished sheet does nothing")
+        #expect(log.entries.count == 3, "skipping a finished scheduler does nothing")
     }
 
     @Test func cancelRunsNothingMore() async throws {
         let log = Log()
-        let sheet = CueSheet([
-            CueSheet.Cue(at: 0) { log.entries.append("a") },
-            CueSheet.Cue(at: 0.03) { log.entries.append("b") },
+        let sheet = BeatScheduler([
+            BeatScheduler.Cue(at: 0) { log.entries.append("a") },
+            BeatScheduler.Cue(at: 0.03) { log.entries.append("b") },
         ], onFinish: { log.finished = true })
         sheet.play()
         try await waitUntil { log.entries.count == 1 }
@@ -211,12 +211,12 @@ struct CueSheetTests {
         #expect(!sheet.isPlaying)
         try await Task.sleep(for: .milliseconds(80))
         #expect(log.entries == ["a"])
-        #expect(!log.finished, "a cancelled sheet never finishes")
+        #expect(!log.finished, "a cancelled scheduler never finishes")
     }
 
     @Test func playsAgainAfterFinishing() async throws {
         let log = Log()
-        let sheet = CueSheet([CueSheet.Cue(at: 0) { log.entries.append("a") }], onFinish: { log.finished = true })
+        let sheet = BeatScheduler([BeatScheduler.Cue(at: 0) { log.entries.append("a") }], onFinish: { log.finished = true })
         sheet.play()
         try await waitUntil { log.finished }
         log.finished = false
@@ -225,9 +225,9 @@ struct CueSheetTests {
         #expect(log.entries == ["a", "a"])
     }
 
-    @Test func anEmptySheetJustFinishes() async throws {
+    @Test func anEmptySchedulerJustFinishes() async throws {
         let log = Log()
-        let sheet = CueSheet([], onFinish: { log.finished = true })
+        let sheet = BeatScheduler([], onFinish: { log.finished = true })
         sheet.play()
         try await waitUntil { log.finished }
         #expect(!sheet.isPlaying)
@@ -306,7 +306,10 @@ struct MotionPolicyTests {
         effects: EffectsLevel = .full,
         screenShake: Bool = true,
         flashes: Bool = true,
-        hapticStrength: Double = 1
+        hapticStrength: Double = 1,
+        isActive: Bool = true,
+        isIdle: Bool = false,
+        maxFramesPerSecond: Int = 60
     ) -> MotionPolicy {
         MotionPolicy.resolve(
             reduceMotion: reduceMotion,
@@ -317,7 +320,10 @@ struct MotionPolicyTests {
             effects: effects,
             screenShake: screenShake,
             flashes: flashes,
-            hapticStrength: hapticStrength
+            hapticStrength: hapticStrength,
+            isActive: isActive,
+            isIdle: isIdle,
+            maxFramesPerSecond: maxFramesPerSecond
         )
     }
 
@@ -337,21 +343,127 @@ struct MotionPolicyTests {
         #expect(resolve(reduceMotion: true, lowPower: true).tier == .still, "still beats reduced")
     }
 
-    @Test func lowPowerHeatAndReducedEffectsDropATier() {
+    @Test func lowPowerHeatReducedEffectsAndIdlingDropATier() {
         for policy in [
             resolve(lowPower: true),
             resolve(thermalState: .serious),
-            resolve(thermalState: .critical),
             resolve(effects: .reduced),
+            resolve(isIdle: true),
         ] {
             #expect(policy.tier == .reduced)
             #expect(!policy.loopsHoldStill)
             #expect(!policy.allowsFlashes)
             #expect(!policy.allowsShake)
-            #expect(policy.ambientFrameInterval == 1 / 20)
+            #expect(policy.ambientFrameInterval == 1.0 / 20)
+            #expect(policy.maxFrameRate == 30)
+            #expect(policy.allowsShaders)
+            #expect(!policy.collapsesSequences)
         }
         #expect(resolve(thermalState: .fair).tier == .full)
-        #expect(resolve().ambientFrameInterval == 1 / 30)
+        #expect(resolve().ambientFrameInterval == 1.0 / 30)
+    }
+
+    @Test func aCriticallyHotDeviceHoldsStillWithoutShaders() {
+        let policy = resolve(thermalState: .critical)
+        #expect(policy.tier == .still)
+        #expect(!policy.allowsShaders)
+        #expect(resolve(thermalState: .serious).allowsShaders)
+        #expect(resolve(reduceMotion: true).allowsShaders, "only heat takes the shaders")
+    }
+
+    @Test func backgroundingHoldsStill() {
+        let policy = resolve(isActive: false)
+        #expect(policy.tier == .still)
+        #expect(policy.holdsStill)
+        #expect(policy.collapsesSequences)
+        #expect(!policy.allowsParticles)
+        #expect(policy.particleBudget == 0)
+        #expect(resolve(isActive: false, isIdle: true).tier == .still, "still beats idle")
+    }
+
+    @Test func idlingDropsTheFullTierOnly() {
+        #expect(resolve(isIdle: true).tier == .reduced)
+        #expect(resolve(reduceMotion: true, isIdle: true).tier == .still)
+
+        let idled = MotionPolicy.full.idled()
+        #expect(idled.tier == .reduced)
+        #expect(!idled.flashes)
+        #expect(!idled.shakes)
+        #expect(idled.maxFrameRate == 30)
+        #expect(idled.particleBudget == 240)
+        #expect(idled.ambientFrameInterval == 1.0 / 20)
+        #expect(!idled.collapsesSequences)
+        #expect(MotionPolicy.reduced.idled() == .reduced)
+        #expect(MotionPolicy.still.idled() == .still, "idling never wakes a stiller policy")
+        #expect(MotionPolicy.screenshot.idled().freezesClocks, "idling keeps the clocks frozen")
+    }
+
+    @Test func sequencesCollapseUnderVoiceOverStillnessAndMinimalEffects() {
+        #expect(resolve(voiceOver: true).collapsesSequences)
+        #expect(resolve(effects: .minimal).collapsesSequences)
+        #expect(resolve(reduceMotion: true).collapsesSequences)
+        #expect(resolve(isActive: false).collapsesSequences)
+        #expect(!resolve().collapsesSequences)
+        #expect(!resolve(lowPower: true).collapsesSequences)
+        #expect(!resolve(effects: .reduced).collapsesSequences)
+    }
+
+    @Test func frameRatesAndIntervalsFollowTheTier() {
+        let full = resolve()
+        let reduced = resolve(effects: .reduced)
+        let still = resolve(effects: .minimal)
+        #expect(full.maxFrameRate == 60)
+        #expect(reduced.maxFrameRate == 30)
+        #expect(still.maxFrameRate == 30)
+        #expect(resolve(maxFramesPerSecond: 120).maxFrameRate == 60, "ProMotion is capped to 60")
+        #expect(resolve(maxFramesPerSecond: 30).maxFrameRate == 30, "never faster than the screen")
+        #expect(resolve(maxFramesPerSecond: 0).maxFrameRate == 60, "an unknown screen is taken as 60")
+        #expect(full.effectsInterval == 1.0 / 60)
+        #expect(reduced.effectsInterval == 1.0 / 30)
+        #expect(full.waterInterval == 1.0 / 24)
+        #expect(reduced.waterInterval == 1.0 / 12)
+        #expect(still.waterInterval == nil)
+        #expect(full.ambientInterval == 1.0 / 30)
+        #expect(reduced.ambientInterval == 1.0 / 15)
+        #expect(still.ambientInterval == nil)
+        #expect(full.sceneryInterval == 1.0 / 20)
+        #expect(reduced.sceneryInterval == 1.0 / 10)
+        #expect(still.sceneryInterval == nil)
+    }
+
+    @Test func durationsShortenThenVanish() {
+        #expect(resolve().duration(1) == 1)
+        #expect(abs(resolve(effects: .reduced).duration(1) - 0.7) < 1e-9)
+        #expect(resolve(effects: .minimal).duration(1) == 0)
+        #expect(MotionPolicy.screenshot.duration(1) == 1, "frozen clocks keep their lengths; they just don't tick")
+    }
+
+    @Test func theScreenshotPolicyFreezesFullVisuals() {
+        let policy = MotionPolicy.screenshot
+        #expect(policy.tier == .full)
+        #expect(policy.freezesClocks)
+        #expect(policy.holdsStill)
+        #expect(policy.loopsHoldStill)
+        #expect(!policy.collapsesSequences)
+        #expect(policy.allowsParticles)
+        #expect(policy.flashes)
+        #expect(policy.allowsShaders)
+        #expect(!MotionPolicy.full.holdsStill)
+        #expect(!MotionPolicy.full.freezesClocks)
+        #expect(MotionPolicy.still.holdsStill)
+    }
+
+    @Test func particlesAndParallaxFollowTheTier() {
+        #expect(resolve().allowsParticles)
+        #expect(resolve().allowsParallax)
+        #expect(resolve(effects: .reduced).allowsParticles)
+        #expect(!resolve(effects: .reduced).allowsParallax)
+        #expect(!resolve(effects: .minimal).allowsParticles)
+        #expect(!resolve(voiceOver: true).allowsParallax)
+        #expect(resolve().particleBudget == 600)
+        #expect(resolve(effects: .reduced).particleBudget == 240)
+        #expect(resolve().flashes == resolve().allowsFlashes)
+        #expect(resolve().shakes == resolve().allowsShake)
     }
 
     @Test func flashesAndShakeAreTheirOwnSwitches() {

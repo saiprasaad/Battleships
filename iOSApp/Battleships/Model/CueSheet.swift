@@ -1,94 +1,141 @@
 import Foundation
 
-/// Runs closures at offsets from `play()`: the choreography of a set piece whose beats change state,
-/// play a sound or a haptic, or start an animation (an opening, a finale, a cast-off). Everything
-/// happens on the main actor. "Tap to skip" and backgrounding call `skip()`, which runs the cues
-/// left at once so the sequence lands in its end state; `cancel()` abandons it without running
-/// anything more.
-///
-/// Make it on the main actor (in `onAppear`, a `.task`, or a view's own `init`), not in a `@State`
-/// default value. A sheet can be played again once it has finished or been cancelled.
-@MainActor
-final class CueSheet {
-    struct Cue {
-        /// Seconds after `play()`.
-        let at: TimeInterval
-        let action: @MainActor () -> Void
+// Foundation only, so the model layer and the Linux compile check can read it: the choreography of a
+// set piece as data. `CuePlayer` (Views/Components/CuePlayer.swift) plays a sheet on screen.
 
-        init(at: TimeInterval, action: @escaping @MainActor () -> Void) {
-            self.at = at
-            self.action = action
-        }
+/// One beat of a set piece: its name, when it starts (seconds from the start of its sheet) and how
+/// long it runs. A beat with no duration is a moment: a sound, a haptic, a state change.
+struct Cue: Hashable, Sendable {
+    let name: String
+    let start: TimeInterval
+    let duration: TimeInterval
+
+    init(name: String, start: TimeInterval, duration: TimeInterval = 0) {
+        self.name = name
+        self.start = max(0, start)
+        self.duration = max(0, duration)
     }
 
-    /// In playing order: by offset, then as given.
-    private let cues: [Cue]
-    private let onFinish: (@MainActor () -> Void)?
-    /// The first cue that hasn't run.
-    private var nextIndex = 0
-    private var task: Task<Void, Never>?
-    private(set) var isPlaying = false
+    /// When the cue is over.
+    var end: TimeInterval { start + duration }
+}
 
-    init(_ cues: [Cue], onFinish: (@MainActor () -> Void)? = nil) {
+/// Easing for progress values, 0…1 in and 0…1 out. Foundation only, so a cue sheet's frames can use
+/// it on the model side; `Motion.easeOut` in the views is the same curve.
+enum Easing {
+    static func linear(_ progress: Double) -> Double {
+        clamp(progress)
+    }
+
+    /// Fast out, slow in: `1 - (1 - x)³`, the curve of `Motion.easeOut`.
+    static func easeOut(_ progress: Double) -> Double {
+        let x = clamp(progress)
+        return 1 - (1 - x) * (1 - x) * (1 - x)
+    }
+
+    static func easeIn(_ progress: Double) -> Double {
+        let x = clamp(progress)
+        return x * x * x
+    }
+
+    static func easeInOut(_ progress: Double) -> Double {
+        let x = clamp(progress)
+        return x * x * (3 - 2 * x)
+    }
+
+    static func clamp(_ value: Double) -> Double {
+        min(max(value, 0), 1)
+    }
+}
+
+/// The choreography of a set piece as a value: named cues on one timeline `total` seconds long. A
+/// `CuePlayer` plays it from a trigger and hands its content a `Frame` per tick; the frame answers
+/// how far each cue has got. Being a plain value it can sit in a `@State` default or a `static let`.
+struct CueSheet: Equatable, Sendable {
+    /// In playing order: by start, then as given.
+    let cues: [Cue]
+    /// How long the whole sheet runs. Cues may end before it; the player finishes at `total`.
+    let total: TimeInterval
+
+    init(_ cues: [Cue], total: TimeInterval) {
         self.cues = cues.enumerated()
-            .sorted { ($0.element.at, $0.offset) < ($1.element.at, $1.offset) }
+            .sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }
             .map(\.element)
-        self.onFinish = onFinish
+        self.total = max(0, total)
     }
 
-    /// Starts the sheet (a no-op while it is playing). Cues fire in order; `onFinish` runs after the last.
-    func play() {
-        guard !isPlaying else { return }
-        isPlaying = true
-        nextIndex = 0
-        let start = ContinuousClock.now
-        task = Task { @MainActor [weak self] in
-            var index = 0
-            while let cue = self?.cue(at: index) {
-                do {
-                    try await Task.sleep(until: start + .seconds(cue.at), clock: .continuous)
-                } catch {
-                    return   // cancelled: skip() or cancel() took over
-                }
-                // A skip may have run this cue while the sleep was ending.
-                guard !Task.isCancelled, let self, self.isPlaying, self.nextIndex == index else { return }
-                self.nextIndex = index + 1
-                cue.action()
-                index += 1
+    /// A sheet exactly as long as its last cue.
+    init(_ cues: [Cue]) {
+        self.init(cues, total: cues.map(\.end).max() ?? 0)
+    }
+
+    /// The first cue of that name.
+    func cue(_ name: String) -> Cue? {
+        cues.first { $0.name == name }
+    }
+
+    /// The sheet `elapsed` seconds in. `collapsed` (the policy's `collapsesSequences`) lands the
+    /// frame on the end state: every progress reads 1 and nothing is active.
+    func frame(at elapsed: TimeInterval, collapsed: Bool) -> Frame {
+        Frame(elapsed: collapsed ? total : max(0, elapsed), total: total, collapsed: collapsed, cues: cues)
+    }
+
+    /// Where every cue is at one moment.
+    struct Frame: Sendable {
+        let elapsed: TimeInterval
+        let total: TimeInterval
+        /// `policy.collapsesSequences`: everything reads 1.
+        let collapsed: Bool
+        let cues: [Cue]
+
+        /// How far `name` has got, 0…1 through `curve`. `index` and `stagger` offset the start for
+        /// the `index`th of several things on one cue (rows, letters, ships), each with the cue's
+        /// duration. 0 for a cue the sheet doesn't have; 1 for everything under collapse.
+        func progress(
+            _ name: String,
+            index: Int = 0,
+            stagger: TimeInterval = 0,
+            curve: (Double) -> Double = Easing.easeOut
+        ) -> Double {
+            if collapsed { return 1 }
+            guard let cue = cue(name) else { return 0 }
+            let start = cue.start + Double(max(0, index)) * stagger
+            let raw: Double
+            if cue.duration > 0 {
+                raw = Easing.clamp((elapsed - start) / cue.duration)
+            } else {
+                raw = elapsed >= start ? 1 : 0
             }
-            self?.finish()
+            return curve(raw)
         }
-    }
 
-    /// Runs every remaining cue immediately, in order, then `onFinish`.
-    func skip() {
-        guard isPlaying else { return }
-        task?.cancel()
-        task = nil
-        while nextIndex < cues.count {
-            let cue = cues[nextIndex]
-            nextIndex += 1
-            cue.action()
+        /// Whether `name` is running right now (never under collapse).
+        func isActive(_ name: String) -> Bool {
+            guard !collapsed, let cue = cue(name) else { return false }
+            return cue.start <= elapsed && elapsed < cue.end
         }
-        finish()
-    }
 
-    /// Stops without running anything else, `onFinish` included.
-    func cancel() {
-        task?.cancel()
-        task = nil
-        isPlaying = false
-    }
+        /// Whether `name` has begun (always, under collapse).
+        func hasStarted(_ name: String) -> Bool {
+            if collapsed { return true }
+            guard let cue = cue(name) else { return false }
+            return elapsed >= cue.start
+        }
 
-    private func cue(at index: Int) -> Cue? {
-        guard isPlaying, index < cues.count else { return nil }
-        return cues[index]
-    }
+        /// Whether `name` is over (always, under collapse).
+        func hasEnded(_ name: String) -> Bool {
+            if collapsed { return true }
+            guard let cue = cue(name) else { return false }
+            return elapsed >= cue.end
+        }
 
-    private func finish() {
-        guard isPlaying else { return }
-        isPlaying = false
-        task = nil
-        onFinish?()
+        /// Whether the whole sheet is over.
+        var isFinished: Bool {
+            collapsed || elapsed >= total
+        }
+
+        private func cue(_ name: String) -> Cue? {
+            cues.first { $0.name == name }
+        }
     }
 }
