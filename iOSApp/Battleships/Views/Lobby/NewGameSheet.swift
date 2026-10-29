@@ -2,15 +2,17 @@ import BattleshipAPI
 import BattleshipCore
 import SwiftUI
 
-/// Choose an opponent and rules, then deploy a fleet.
+/// Choose an opponent and rules, then deploy a fleet. Presented as glass over the lobby's own sea,
+/// with a still sea of its own inside; its first sections enter one after another.
 struct NewGameSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.motionPolicy) private var policy
     @State private var draft: NewGameDraft
     @State private var showsPlacement = false
     @State private var showsSignIn = false
-    @State private var errorMessage: String?
+    @State private var entrance = EntranceClock()
     private let onStarted: @MainActor (GameRoute) -> Void
 
     init(draft: NewGameDraft, onStarted: @escaping @MainActor (GameRoute) -> Void) {
@@ -28,7 +30,7 @@ struct NewGameSheet: View {
                     cards {
                         ForEach(OpponentChoice.allCases) { choice in
                             Button {
-                                withAnimation(.snappy) { draft.opponent = choice }
+                                withAnimation(Motion.Curve.snap.policy(policy)) { draft.opponent = choice }
                             } label: {
                                 OpponentCard(choice: choice, isSelected: draft.opponent == choice, isStacked: isStacked)
                             }
@@ -38,6 +40,7 @@ struct NewGameSheet: View {
                             .accessibilityAddTraits(draft.opponent == choice ? .isSelected : [])
                         }
                     }
+                    .entrance(entrance, step: 0)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                 } header: {
@@ -50,10 +53,9 @@ struct NewGameSheet: View {
 
                 if draft.opponent.isOnline && !app.isSignedIn {
                     Section {
-                        Button("Sign in to play online") { showsSignIn = true }
-                    } footer: {
-                        Text("Online battles need an account so your opponent can find you.")
-                            .foregroundStyle(Theme.secondaryText)
+                        SignInPrompt(message: "Online battles need an account so your opponent can find you.") {
+                            showsSignIn = true
+                        }
                     }
                     .listRowBackground(Theme.rowBackground)
                 }
@@ -61,6 +63,7 @@ struct NewGameSheet: View {
                 if draft.opponent == .friend {
                     Section {
                         FriendSearchField(username: $draft.friendUsername)
+                            .entrance(entrance, step: 1)
                     } header: {
                         SheetSectionHeader(title: "Friend's username")
                     }
@@ -82,6 +85,7 @@ struct NewGameSheet: View {
                         }
                         .pickerStyle(.inline)
                         .labelsHidden()
+                        .entrance(entrance, step: 1)
                     } header: {
                         SheetSectionHeader(title: "Difficulty")
                     }
@@ -102,13 +106,16 @@ struct NewGameSheet: View {
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
+                    .entrance(entrance, step: 2)
                 } header: {
                     SheetSectionHeader(title: "Rules")
                 }
                 .listRowBackground(Theme.rowBackground)
             }
             .scrollContentBackground(.hidden)
-            .background { OceanBackdrop() }
+            // Still: the lobby's sea drifts behind the glass; this one just matches it.
+            .background { OceanBackdrop(isAnimated: false) }
+            .toastHost()
             .navigationTitle("New Battle")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -121,26 +128,33 @@ struct NewGameSheet: View {
                 }
             }
             .navigationDestination(isPresented: $showsPlacement) {
-                FleetPlacementView(mode: draft.mode, confirmTitle: confirmTitle) { fleet in
-                    await start(with: fleet)
+                FleetPlacementView(mode: draft.mode, confirmTitle: Self.confirmTitle(for: draft)) { fleet in
+                    try await start(with: fleet)
                 }
             }
             .sheet(isPresented: $showsSignIn) {
                 AuthSheet()
             }
-            .alert("Couldn't start the battle", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "")
+            .onChange(of: showsSignIn) {
+                app.feedback.play(.navigate)
+            }
+            .onChange(of: showsPlacement) {
+                if showsPlacement {
+                    app.feedback.play(.navigate)
+                }
             }
         }
+        .presentationBackground(.ultraThinMaterial)
+        .presentationCornerRadius(32)
+        .presentationDragIndicator(.visible)
     }
 
     private var canContinue: Bool {
         draft.isComplete && (!draft.opponent.isOnline || app.isSignedIn)
     }
 
-    private var confirmTitle: String {
+    /// The deploy screen's confirm button for a draft: what starting it means.
+    static func confirmTitle(for draft: NewGameDraft) -> String {
         switch draft.opponent {
         case .computer: "Start Battle"
         case .randomPlayer: "Find Opponent"
@@ -148,26 +162,17 @@ struct NewGameSheet: View {
         }
     }
 
-    private func start(with fleet: [ShipPlacement]) async {
-        do {
-            switch draft.opponent {
-            case .computer:
-                let match = try app.solo.start(mode: draft.mode, difficulty: draft.difficulty, fleet: fleet)
-                onStarted(.solo(match.id))
-            case .randomPlayer:
-                let game = try await app.online.create(CreateGameRequest(mode: draft.mode, fleet: fleet))
-                onStarted(.online(game.id))
-                await PushPermission.requestIfNeeded(settings: app.settings)
-            case .friend:
-                let game = try await app.online.create(
-                    CreateGameRequest(mode: draft.mode, fleet: fleet, opponent: draft.trimmedFriendUsername)
-                )
-                onStarted(.online(game.id))
-                await PushPermission.requestIfNeeded(settings: app.settings)
-            }
-        } catch {
-            errorMessage = error.userMessage
-            app.feedback.play(.invalid)
+    /// Starts the game once the fleet has cast off. An error is thrown back to the deploy screen,
+    /// which sails the ships back and shows it as a toast.
+    private func start(with fleet: [ShipPlacement]) async throws {
+        let route = try await app.startGame(draft, fleet: fleet)
+        if draft.opponent == .friend {
+            ToastCenter.shared.show(.success, "Challenge sent to \(draft.trimmedFriendUsername)")
+            app.feedback.play(.toastSuccess)
+        }
+        onStarted(route)
+        if draft.opponent.isOnline {
+            await PushPermission.requestIfNeeded(settings: app.settings)
         }
     }
 }

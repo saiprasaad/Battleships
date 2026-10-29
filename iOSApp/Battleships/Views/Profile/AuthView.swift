@@ -10,6 +10,7 @@ struct AuthSheet: View {
     var body: some View {
         NavigationStack {
             AuthForm { dismiss() }
+                .toastHost()
                 .navigationTitle("Battleships Account")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -19,6 +20,9 @@ struct AuthSheet: View {
                 }
         }
         .presentationDetents([.large])
+        .presentationBackground(.ultraThinMaterial)
+        .presentationCornerRadius(32)
+        .presentationDragIndicator(.visible)
     }
 }
 
@@ -42,6 +46,9 @@ struct AuthForm: View {
 
     @Environment(AppModel.self) private var app
     @Environment(\.webAuthenticationSession) private var webAuthenticationSession
+    @Environment(\.motionPolicy) private var policy
+    /// Restarted when the server has said which sign-ins it offers, so the buttons enter together.
+    @State private var providersEntrance = EntranceClock()
     @State private var mode: Mode = .signIn
     @State private var username = ""
     @State private var password = ""
@@ -59,18 +66,40 @@ struct AuthForm: View {
 
             if let signup {
                 chooseUsername(for: signup)
+                    .transition(Self.usernameSwap)
             } else {
-                if offersApple {
-                    quickSignIn
+                Group {
+                    if offersApple {
+                        quickSignIn
+                    }
+                    usernameAndPassword
                 }
-                usernameAndPassword
+                .transition(Self.credentialsSwap)
             }
         }
         .scrollContentBackground(.hidden)
-        .background { OceanBackdrop() }
-        .animation(.default, value: signup == nil)
+        // Still: the host's sea drifts behind the glass; this one just matches it.
+        .background { OceanBackdrop(isAnimated: false) }
+        .animation(Motion.Curve.phase.policy(policy), value: signup == nil)
+        .animation(Motion.Curve.phase.policy(policy), value: errorMessage)
         .onChange(of: mode) { errorMessage = nil }
-        .task { await app.session.loadProviders() }
+        .task {
+            await app.session.loadProviders()
+            providersEntrance.restart()
+        }
+    }
+
+    /// The username step slides in from the trailing edge and leaves to the leading one.
+    private static var usernameSwap: AnyTransition {
+        .asymmetric(
+            insertion: .move(edge: .trailing).combined(with: .opacity),
+            removal: .move(edge: .leading).combined(with: .opacity)
+        )
+    }
+
+    /// The credentials leave to the leading edge and come back from it.
+    private static var credentialsSwap: AnyTransition {
+        .move(edge: .leading).combined(with: .opacity)
     }
 
     // MARK: Sections
@@ -145,6 +174,7 @@ struct AuthForm: View {
                 .signInWithAppleButtonStyle(.white)
                 .frame(height: 50)
                 .clipShape(.rect(cornerRadius: 12))
+                .staggeredEntrance(index: 0, trigger: providersEntrance, stagger: Timing.Stagger.block)
 
                 if let googleClientID = app.session.providers.googleClientID {
                     Button {
@@ -153,6 +183,7 @@ struct AuthForm: View {
                         GoogleButtonLabel()
                     }
                     .buttonStyle(.plain)
+                    .staggeredEntrance(index: 1, trigger: providersEntrance, stagger: Timing.Stagger.block)
                 }
             }
             .disabled(isWorking)
@@ -251,10 +282,12 @@ struct AuthForm: View {
         .listRowBackground(Theme.rowBackground)
     }
 
+    /// The inline problem row; server errors are also shown as a toast (`show(_:)`).
     private func problemSection(_ problem: String) -> some View {
         Section {
             Label(problem, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
+                .transition(.move(edge: .top).combined(with: .opacity))
         }
         .listRowBackground(Theme.rowBackground)
     }
@@ -312,8 +345,7 @@ struct AuthForm: View {
                 case .register:
                     try await app.register(username: name, password: password)
                 }
-                app.feedback.play(.place)
-                onSuccess()
+                celebrateSignIn()
             } catch {
                 show(error.userMessage)
             }
@@ -356,8 +388,7 @@ struct AuthForm: View {
             do {
                 switch try await attempt() {
                 case .signedIn:
-                    app.feedback.play(.place)
-                    onSuccess()
+                    celebrateSignIn()
                 case let .needsUsername(ticket, suggestion):
                     chosenUsername = suggestion ?? ""
                     signup = PendingSignup(ticket: ticket, provider: provider)
@@ -390,8 +421,7 @@ struct AuthForm: View {
             defer { isWorking = false }
             do {
                 try await app.completeSignup(ticket: signup.ticket, username: name)
-                app.feedback.play(.place)
-                onSuccess()
+                celebrateSignIn()
             } catch let error as APIError where error.code == .signupTicketInvalid {
                 self.signup = nil
                 show("That took a little too long. Please continue with \(signup.provider) again.")
@@ -401,9 +431,19 @@ struct AuthForm: View {
         }
     }
 
+    /// Signed in: the good news as a toast with its sound, and the sheet goes.
+    private func celebrateSignIn() {
+        let name = app.session.account?.username
+        ToastCenter.shared.show(.success, name.map { "Signed in as \($0)" } ?? "Signed in")
+        app.feedback.play(.toastSuccess)
+        onSuccess()
+    }
+
+    /// A problem from the server: the inline row, and a toast that stays until dismissed.
     private func show(_ message: String) {
         errorMessage = message
-        app.feedback.play(.invalid)
+        ToastCenter.shared.show(.error, message)
+        app.feedback.play(.toastError)
     }
 }
 

@@ -50,16 +50,36 @@ struct ModeBadge: View {
     }
 }
 
-/// A big number with a caption underneath.
+/// A big number with a caption underneath. Given a `number`, it rolls to new values.
 struct StatTile: View {
     let title: String
     let value: String
+    /// The value as a count, when it is one, so it can roll.
+    var number: Int?
+
+    init(title: String, value: String) {
+        self.title = title
+        self.value = value
+        number = nil
+    }
+
+    init(title: String, number: Int) {
+        self.title = title
+        value = "\(number)"
+        self.number = number
+    }
 
     var body: some View {
         VStack(spacing: 2) {
-            Text(value)
-                .font(.title3.weight(.bold).monospacedDigit())
-                .contentTransition(.numericText())
+            if let number {
+                Text("\(number)")
+                    .font(.title3.weight(.bold))
+                    .rollingNumber(number)
+            } else {
+                Text(value)
+                    .font(.title3.weight(.bold).monospacedDigit())
+                    .contentTransition(.numericText())
+            }
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -69,14 +89,23 @@ struct StatTile: View {
     }
 }
 
-/// Shows whether live updates are flowing, as a single icon.
+/// Shows whether live updates are flowing, as a single icon: pulsing while connecting, bouncing
+/// once when the connection comes back.
 struct ConnectionBadge: View {
     let connection: OnlineGamesStore.Connection
+    @Environment(\.motionPolicy) private var policy
+    @State private var reconnects = 0
 
     var body: some View {
         Image(systemName: connection == .offline ? "antenna.radiowaves.left.and.right.slash" : "antenna.radiowaves.left.and.right")
             .foregroundStyle(color)
-            .symbolEffect(.pulse, options: .repeating, isActive: connection == .connecting)
+            .symbolEffect(.pulse, options: .repeating, isActive: connection == .connecting && policy.tier != .still)
+            .symbolEffect(.bounce, value: reconnects)
+            .onChange(of: connection) { before, after in
+                if after == .live, before != .live, policy.tier == .full {
+                    reconnects += 1
+                }
+            }
             .accessibilityLabel("Live updates: \(label)")
     }
 

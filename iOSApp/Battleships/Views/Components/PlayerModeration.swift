@@ -48,8 +48,9 @@ extension View {
     }
 
     /// The dialogs that carry out a ``ModerationRequest`` (App Store guideline 1.2): reporting with
-    /// a reason, blocking and unblocking, then a thank-you or an error. `onBlocked` runs once a
-    /// block has gone through.
+    /// a reason, blocking and unblocking. Decisions are dialogs; the news that a report was sent, or
+    /// that something failed, is a toast on the nearest `toastHost()`. `onBlocked` runs once a block
+    /// has gone through.
     func playerModeration(
         _ request: Binding<ModerationRequest?>,
         onBlocked: @escaping @MainActor (PlayerSummary) -> Void = { _ in }
@@ -81,9 +82,6 @@ private struct PlayerModerationDialogs: ViewModifier {
     @Environment(AppModel.self) private var app
     @Binding var request: ModerationRequest?
     let onBlocked: @MainActor (PlayerSummary) -> Void
-    /// The player just reported, for the thank-you.
-    @State private var reported: PlayerSummary?
-    @State private var errorMessage: String?
 
     func body(content: Content) -> some View {
         content
@@ -120,26 +118,6 @@ private struct PlayerModerationDialogs: ViewModifier {
             } message: { request in
                 Text("\(request.player.username) will be able to challenge you again, and you could be matched with each other.")
             }
-            .alert(
-                "Report Sent",
-                isPresented: Binding(get: { reported != nil }, set: { if !$0 { reported = nil } }),
-                presenting: reported
-            ) { player in
-                if !app.moderation.isBlocked(player.id) {
-                    Button("Block \(player.username)") { offerToBlock(player) }
-                }
-                Button("OK", role: .cancel) {}
-            } message: { _ in
-                Text("Thanks for letting us know; the people who run this server will look into it.")
-            }
-            .alert(
-                "Something went wrong",
-                isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "")
-            }
             .task(id: app.session.account?.id) {
                 // Menus offer Unblock to players already blocked, so find out who they are.
                 guard app.isSignedIn, !app.moderation.hasLoadedBlockedPlayers else { return }
@@ -163,11 +141,29 @@ private struct PlayerModerationDialogs: ViewModifier {
         Task {
             do {
                 try await app.moderation.report(request.player, reason: reason, gameID: request.gameID)
-                reported = request.player
+                reportSent(about: request.player)
             } catch {
-                errorMessage = error.userMessage
+                fail(error)
             }
         }
+    }
+
+    /// The thank-you, as a toast, with the chance to block the player too. The toast goes before
+    /// the block dialog comes up, so nothing is left behind it.
+    private func reportSent(about player: PlayerSummary) {
+        app.feedback.play(.toastSuccess)
+        var action: Toast.Action?
+        if !app.moderation.isBlocked(player.id) {
+            action = Toast.Action(title: "Block") {
+                ToastCenter.shared.dismiss()
+                self.request = ModerationRequest(action: .block, player: player)
+            }
+        }
+        ToastCenter.shared.show(
+            .success,
+            "Report sent. Thanks for letting us know; the people who run this server will look into it.",
+            action: action
+        )
     }
 
     private func block(_ player: PlayerSummary) {
@@ -176,7 +172,7 @@ private struct PlayerModerationDialogs: ViewModifier {
                 try await app.moderation.block(player)
                 onBlocked(player)
             } catch {
-                errorMessage = error.userMessage
+                fail(error)
             }
         }
     }
@@ -186,17 +182,14 @@ private struct PlayerModerationDialogs: ViewModifier {
             do {
                 try await app.moderation.unblock(player)
             } catch {
-                errorMessage = error.userMessage
+                fail(error)
             }
         }
     }
 
-    /// Asks to block the player just reported. The thank-you has to finish going away first: another
-    /// alert can't appear while one is still on screen.
-    private func offerToBlock(_ player: PlayerSummary) {
-        Task {
-            try? await Task.sleep(for: .milliseconds(450))
-            request = ModerationRequest(action: .block, player: player)
-        }
+    /// Something went wrong: an error toast, which stays until dismissed.
+    private func fail(_ error: any Error) {
+        ToastCenter.shared.show(.error, error.userMessage)
+        app.feedback.play(.toastError)
     }
 }

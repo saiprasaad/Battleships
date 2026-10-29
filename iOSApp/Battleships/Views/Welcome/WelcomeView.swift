@@ -1,27 +1,101 @@
 import SwiftUI
 
-/// Shown once, on first launch: what the game is, and a button to begin.
+/// Shown once, on first launch: what the game is, and a button to begin. The reveal is a 1.4 s cue
+/// sheet: the radar scope boots like an instrument and its glyph blooms, BATTLESHIPS rises as one
+/// word, the three feature rows cascade in from the left, the horizon ship steams in to its mooring
+/// and Set Sail rises last with its halo. Set Sail works from the first frame; a tap anywhere skips
+/// to the end. Under VoiceOver and in the still tier everything is in place at once and the screen
+/// fades in as one.
 struct WelcomeView: View {
     let onStart: @MainActor () -> Void
-    @State private var hasAppeared = false
+    @Environment(\.motionPolicy) private var policy
+    @State private var isSkipped = false
+    @State private var sails = 0
+    @State private var isShown = false
+    @State private var isLeaving = false
+
+    private struct Feature {
+        let icon: String
+        let title: String
+        let detail: String
+    }
+
+    private static let features = [
+        Feature(
+            icon: "cpu",
+            title: "Three computer admirals",
+            detail: "From a Cadet who fires blind to an Admiral who calculates the odds on every shot."
+        ),
+        Feature(
+            icon: "person.2.fill",
+            title: "Challenge your friends",
+            detail: "Play online at your own pace, with a notification when it's your move."
+        ),
+        Feature(
+            icon: "trophy.fill",
+            title: "Climb the leaderboard",
+            detail: "Every online victory raises your rating. Beat a stronger captain to earn more."
+        ),
+    ]
+
+    /// The reveal's beats, in seconds from the first frame.
+    private static let sheet = CueSheet([
+        Cue(name: "boot", start: 0, duration: 0.45),
+        Cue(name: "ship", start: 0.2, duration: 1.2),
+        Cue(name: "glyph", start: 0.25, duration: 0.5),
+        Cue(name: "title", start: 0.3, duration: 0.45),
+        Cue(name: "features", start: 0.5, duration: 0.4),
+        Cue(name: "setSail", start: 0.9, duration: 0.4),
+    ], total: 1.4)
+
+    /// How long Set Sail's recoil is seen before the cover goes (the spec's `Timing.buttonHandoff`,
+    /// to move there once the foundation owner adds the token).
+    private static let handoff: TimeInterval = 0.18
 
     var body: some View {
-        ZStack {
-            OceanBackdrop()
+        CuePlayer(sheet: Self.sheet, trigger: 0, isSkipped: isSkipped) { frame in
+            content(frame)
+        }
+        .ignoresSafeArea(edges: .bottom)
+        .environment(\.colorScheme, .dark)
+        .contentShape(Rectangle())
+        .onTapGesture { isSkipped = true }
+        .opacity(isShown ? 1 : 0)
+        .onAppear {
+            // A collapsed sheet lands at once, so the whole screen fades in together instead.
+            if policy.collapsesSequences {
+                withAnimation(Motion.Curve.phase.policy(policy)) {
+                    isShown = true
+                }
+            } else {
+                isShown = true
+            }
+        }
+    }
+
+    private func content(_ frame: CueSheet.Frame) -> some View {
+        let boot = frame.progress("boot", curve: Easing.linear)
+        let glyph = frame.progress("glyph")
+        let title = frame.progress("title")
+        let ship = frame.progress("ship", curve: Easing.linear)   // the horizon eases the arrival itself
+        let setSail = frame.progress("setSail")
+        return ZStack {
+            ParallaxOcean()
 
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(spacing: 0) {
                         ZStack {
-                            RadarScope()
+                            RadarScope(boot: boot)
                                 .frame(width: 190, height: 190)
                             Image(systemName: "scope")
                                 .font(.system(size: 36, weight: .light))
                                 .foregroundStyle(Theme.reticle)
-                                .glow(Theme.reticle, radius: 10)
+                                // The bloom settles from 30 to 10 as the glyph pops.
+                                .glow(Theme.reticle, radius: 30 - 20 * glyph)
+                                .scaleEffect(0.6 + 0.4 * glyph)
+                                .opacity(glyph)
                         }
-                        .scaleEffect(hasAppeared ? 1 : 0.6)
-                        .opacity(hasAppeared ? 1 : 0)
                         .padding(.top, 28)
                         .accessibilityHidden(true)
 
@@ -29,7 +103,7 @@ struct WelcomeView: View {
                             Text("BATTLESHIPS")
                                 .displayFont(38, weight: .black)
                                 .foregroundStyle(.white)
-                                .glow(Theme.reticle, radius: 14)
+                                .glow(Theme.reticle, radius: 14 * title)
                                 .minimumScaleFactor(0.6)
                                 .lineLimit(1)
                                 .accessibilityAddTraits(.isHeader)
@@ -41,57 +115,56 @@ struct WelcomeView: View {
                         }
                         .padding(.top, 20)
                         .padding(.horizontal, 32)
-                        .offset(y: hasAppeared ? 0 : 20)
-                        .opacity(hasAppeared ? 1 : 0)
+                        .offset(y: 12 * (1 - title))
+                        .opacity(title)
 
                         VStack(alignment: .leading, spacing: 18) {
-                            WelcomeFeature(
-                                icon: "cpu",
-                                title: "Three computer admirals",
-                                detail: "From a Cadet who fires blind to an Admiral who calculates the odds on every shot."
-                            )
-                            WelcomeFeature(
-                                icon: "person.2.fill",
-                                title: "Challenge your friends",
-                                detail: "Play online at your own pace, with a notification when it's your move."
-                            )
-                            WelcomeFeature(
-                                icon: "trophy.fill",
-                                title: "Climb the leaderboard",
-                                detail: "Every online victory raises your rating. Beat a stronger captain to earn more."
-                            )
+                            ForEach(Array(Self.features.enumerated()), id: \.offset) { index, feature in
+                                let row = frame.progress("features", index: index, stagger: Timing.Stagger.block)
+                                WelcomeFeature(icon: feature.icon, title: feature.title, detail: feature.detail)
+                                    .offset(x: -24 * (1 - row))
+                                    .opacity(row)
+                            }
                         }
                         .padding(.horizontal, 32)
                         .padding(.vertical, 28)
                         .frame(maxWidth: 520)
-                        .offset(y: hasAppeared ? 0 : 30)
-                        .opacity(hasAppeared ? 1 : 0)
                     }
                     .frame(maxWidth: .infinity)
                 }
                 .scrollBounceBehavior(.basedOnSize)
 
-                Button { onStart() } label: {
+                Button { setSailTapped() } label: {
                     Label("Set Sail", systemImage: "arrow.right")
                         .labelStyle(TrailingIconLabelStyle())
                         .frame(maxWidth: 360)
                 }
-                .buttonStyle(FireButtonStyle(isArmed: true))
+                .buttonStyle(FireButtonStyle(isArmed: setSail >= 1))
+                .recoil(on: sails, kick: 1.06)
                 .padding(.horizontal, 32)
                 .padding(.top, 8)
-                .opacity(hasAppeared ? 1 : 0)
+                .offset(y: 24 * (1 - setSail))
+                .opacity(setSail)
 
-                HorizonScene(shipPosition: 0.3, shipWidth: 120)
+                HorizonScene(shipPosition: 0.3, shipWidth: 120, shipEntrance: ship)
                     .frame(height: 84)
                     .padding(.top, 4)
             }
         }
-        .ignoresSafeArea(edges: .bottom)
-        .environment(\.colorScheme, .dark)
-        .onAppear {
-            withAnimation(.spring(duration: 0.9, bounce: 0.25).delay(0.1)) {
-                hasAppeared = true
+    }
+
+    /// The kick is seen, then the cover goes with the system's own transition.
+    private func setSailTapped() {
+        guard !isLeaving else { return }
+        isLeaving = true
+        sails += 1
+        isSkipped = true
+        let delay = policy.tier == .full ? Self.handoff : 0
+        Task {
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
             }
+            onStart()
         }
     }
 }

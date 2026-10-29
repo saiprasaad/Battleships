@@ -6,18 +6,19 @@ struct BlockedPlayersView: View {
     private static let explanation = "Blocked players can't challenge you, and you won't be matched with each other. Battles already under way carry on. To block someone, touch and hold their game in Battles or their name on the Leaderboard, or use the ··· menu in a battle."
 
     @Environment(AppModel.self) private var app
+    @Environment(\.motionPolicy) private var policy
     @State private var isLoading = false
     @State private var unblocking: Set<UUID> = []
-    @State private var errorMessage: String?
 
     var body: some View {
         List {
             if !app.moderation.blockedPlayers.isEmpty {
                 Section {
-                    ForEach(app.moderation.blockedPlayers) { player in
+                    ForEach(Array(app.moderation.blockedPlayers.enumerated()), id: \.element.id) { index, player in
                         BlockedPlayerRow(player: player, isUnblocking: unblocking.contains(player.id)) {
                             unblock(player)
                         }
+                        .staggeredEntrance(index: index, trigger: 0)
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button("Unblock", systemImage: "hand.raised.slash") { unblock(player) }
                                 .tint(Theme.reticle)
@@ -37,11 +38,7 @@ struct BlockedPlayersView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .refreshable { await load() }
-        .alert("Couldn't Unblock", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(errorMessage ?? "")
-        }
+        .onAppear { app.feedback.play(.navigate) }
     }
 
     /// Loading, failure and empty states, shown while there's no one in the list.
@@ -49,26 +46,20 @@ struct BlockedPlayersView: View {
     private var status: some View {
         let moderation = app.moderation
         if moderation.blockedPlayers.isEmpty {
-            if isLoading || (!moderation.hasLoadedBlockedPlayers && moderation.loadError == nil) {
-                ProgressView()
-                    .controlSize(.large)
-                    .tint(.white)
-            } else if !moderation.hasLoadedBlockedPlayers, let error = moderation.loadError {
-                ContentUnavailableView {
-                    Label("Couldn't Load Blocked Players", systemImage: "wifi.exclamationmark")
-                } description: {
-                    Text(error)
-                } actions: {
-                    Button("Try Again") { Task { await load() } }
-                        .buttonStyle(.bordered)
-                }
-            } else {
-                ContentUnavailableView {
-                    Label("No Blocked Players", systemImage: "hand.raised")
-                } description: {
-                    Text(Self.explanation)
+            Group {
+                if isLoading || (!moderation.hasLoadedBlockedPlayers && moderation.loadError == nil) {
+                    SonarLoader(captions: ["Hailing the fleet…"])
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
+                } else if !moderation.hasLoadedBlockedPlayers, let error = moderation.loadError {
+                    EmptySeaView(title: "Couldn't Load Blocked Players", message: error) {
+                        Button("Try Again") { Task { await load() } }
+                            .buttonStyle(SecondaryButtonStyle())
+                    }
+                } else {
+                    EmptySeaView(title: "No Blocked Players", message: Self.explanation)
                 }
             }
+            .animation(Motion.Curve.state.policy(policy), value: isLoading)
         }
     }
 
@@ -85,7 +76,8 @@ struct BlockedPlayersView: View {
             do {
                 try await app.moderation.unblock(player)
             } catch {
-                errorMessage = error.userMessage
+                ToastCenter.shared.show(.error, "Couldn't unblock \(player.username). \(error.userMessage)")
+                app.feedback.play(.toastError)
             }
             unblocking.remove(player.id)
         }
@@ -111,8 +103,8 @@ private struct BlockedPlayerRow: View {
             Button { onUnblock() } label: {
                 BusyLabel(title: "Unblock", isBusy: isUnblocking)
             }
-            .buttonStyle(.bordered)
-            .tint(.white)
+            .buttonStyle(SecondaryButtonStyle())
+            .controlSize(.small)
             .disabled(isUnblocking)
             .accessibilityLabel("Unblock \(player.username)")
         }

@@ -185,6 +185,8 @@ struct ScreenshotTests {
     ) async throws {
         let folder = directory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Daylight, whatever the simulator's clock says, so strips compare run to run.
+        DayCycle.fixedPalette = .day
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let (view, controller, action) = try make()
         let window = UIWindow(windowScene: scene)
@@ -246,6 +248,7 @@ struct ScreenshotTests {
         size: CGSize? = nil,
         regularWidth: Bool = false
     ) async throws {
+        DayCycle.fixedPalette = .day
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(origin: .zero, size: size ?? scene.screen.bounds.size)
