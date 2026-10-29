@@ -24,6 +24,8 @@ struct RootView: View {
                 .tabItem { Label("Profile", systemImage: "person.crop.circle") }
                 .tag(Tab.profile)
         }
+        // Every screen and sheet reads how much it may move from here.
+        .motionPolicy(settings: app.settings)
         .preferredColorScheme(.dark)
         .fullScreenCover(isPresented: showsWelcome) {
             WelcomeView { app.settings.hasSeenWelcome = true }

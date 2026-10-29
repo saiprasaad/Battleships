@@ -1,6 +1,22 @@
 import Foundation
 import Observation
 
+/// How much of the game's decorative motion the player wants: everything, the reduced tier (loops
+/// slower, no flashes or shakes), or the still tier (loops hold still, sequences collapse to fades).
+enum EffectsLevel: String, CaseIterable, Sendable, Identifiable {
+    case full, reduced, minimal
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .full: "Full"
+        case .reduced: "Reduced"
+        case .minimal: "Minimal"
+        }
+    }
+}
+
 /// User preferences, persisted in `UserDefaults`.
 @MainActor
 @Observable
@@ -12,6 +28,11 @@ final class AppSettings {
         static let askedForNotifications = "askedForNotifications"
         static let seenWelcome = "hasSeenWelcome"
         static let seenOutcomes = "seenOutcomes"
+        static let effectsLevel = "effectsLevel"
+        static let screenShake = "screenShakeEnabled"
+        static let flashes = "flashesEnabled"
+        static let hapticStrength = "hapticStrength"
+        static let ambientSound = "ambientSoundEnabled"
     }
 
     /// How many finished games are remembered as having had their result shown.
@@ -35,6 +56,33 @@ final class AppSettings {
         didSet { defaults.set(soundEnabled, forKey: Keys.sound) }
     }
 
+    // MARK: Effects
+
+    /// How much decorative motion the game draws. The motion policy turns it into a tier.
+    var effectsLevel: EffectsLevel {
+        didSet { defaults.set(effectsLevel.rawValue, forKey: Keys.effectsLevel) }
+    }
+
+    /// Whether boards and the HUD may jolt when a shell lands.
+    var screenShakeEnabled: Bool {
+        didSet { defaults.set(screenShakeEnabled, forKey: Keys.screenShake) }
+    }
+
+    /// Whether bursts may flash bright: white cores, lightning, light sweeps.
+    var flashesEnabled: Bool {
+        didSet { defaults.set(flashesEnabled, forKey: Keys.flashes) }
+    }
+
+    /// How hard haptics play, from 0 to 1. `hapticsEnabled` stays the on/off switch.
+    var hapticStrength: Double {
+        didSet { defaults.set(hapticStrength, forKey: Keys.hapticStrength) }
+    }
+
+    /// Whether the sea is heard under the battle.
+    var ambientSoundEnabled: Bool {
+        didSet { defaults.set(ambientSoundEnabled, forKey: Keys.ambientSound) }
+    }
+
     /// Whether the app has already asked for permission to send notifications.
     var hasAskedForNotifications: Bool {
         didSet { defaults.set(hasAskedForNotifications, forKey: Keys.askedForNotifications) }
@@ -53,6 +101,11 @@ final class AppSettings {
         serverURL = defaults.string(forKey: Keys.serverURL).flatMap(Self.validatedServerURL) ?? defaultServerURL
         hapticsEnabled = defaults.object(forKey: Keys.haptics) as? Bool ?? true
         soundEnabled = defaults.object(forKey: Keys.sound) as? Bool ?? true
+        effectsLevel = defaults.string(forKey: Keys.effectsLevel).flatMap(EffectsLevel.init(rawValue:)) ?? .full
+        screenShakeEnabled = defaults.object(forKey: Keys.screenShake) as? Bool ?? true
+        flashesEnabled = defaults.object(forKey: Keys.flashes) as? Bool ?? true
+        hapticStrength = min(max(defaults.object(forKey: Keys.hapticStrength) as? Double ?? 1, 0), 1)
+        ambientSoundEnabled = defaults.object(forKey: Keys.ambientSound) as? Bool ?? true
         hasAskedForNotifications = defaults.bool(forKey: Keys.askedForNotifications)
         hasSeenWelcome = defaults.bool(forKey: Keys.seenWelcome)
     }

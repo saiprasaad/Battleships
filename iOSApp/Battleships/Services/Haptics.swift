@@ -1,6 +1,7 @@
 import UIKit
 
-/// Tactile feedback for the moments that matter in a battle.
+/// Tactile feedback on the UIKit generators: the fallback behind ``HapticEngine`` where Core
+/// Haptics isn't available, so every event still has a feel.
 @MainActor
 final class Haptics: FeedbackPlayer {
     private let isEnabled: @MainActor () -> Bool
@@ -46,6 +47,40 @@ final class Haptics: FeedbackPlayer {
             notification.notificationOccurred(.success)
         case .defeat:
             notification.notificationOccurred(.error)
+        case .lift:
+            light.impactOccurred(intensity: 0.7)
+        case .rotate:
+            light.impactOccurred()
+        case .castOff:
+            medium.impactOccurred()
+        case .whistle:
+            // The generators can't rise; the sound and the telegraph on screen carry it.
+            break
+        case .turnSting:
+            selection.selectionChanged()
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(120))
+                self?.selection.selectionChanged()
+            }
+        case .stamp:
+            rigid.impactOccurred(intensity: 1)
+        case .finalBlow:
+            heavy.impactOccurred(intensity: 1)
+        case .matchFound:
+            light.impactOccurred()
+        case .opening:
+            medium.impactOccurred()
+        case .toastSuccess:
+            notification.notificationOccurred(.success)
+        case .toastError:
+            notification.notificationOccurred(.error)
+        case .tick:
+            // Too small for a generator; a counter stepping at this rate would only buzz.
+            break
+        case .lastShip:
+            medium.impactOccurred()
+        case .streak:
+            light.impactOccurred()
         }
     }
 }

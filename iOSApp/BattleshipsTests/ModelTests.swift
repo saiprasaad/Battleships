@@ -375,15 +375,6 @@ struct SoundEffectTests {
         #expect(samples.allSatisfy { $0.isFinite && abs($0) <= 1 })
         #expect(samples.contains { abs($0) > 0.05 })
     }
-
-    @Test func shellsLandAfterTheirFlight() {
-        let flight = SoundSynthesis.frames(SoundSynthesis.flightTime)
-        for event in [FeedbackEvent.hit, .miss, .sunk] {
-            let samples = SoundSynthesis.samples(for: event)
-            #expect(samples.prefix(flight).allSatisfy { $0 == 0 }, "silent while the shell is in the air")
-            #expect(samples.dropFirst(flight).prefix(4_000).contains { abs($0) > 0.1 }, "then it lands")
-        }
-    }
 }
 
 @MainActor

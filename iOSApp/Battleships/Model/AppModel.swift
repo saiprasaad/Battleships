@@ -145,6 +145,7 @@ final class AppModel {
     // MARK: App lifecycle
 
     func appDidBecomeActive() {
+        ambienceSettingDidChange()
         Task {
             await session.revokePendingSessions()
         }
@@ -161,7 +162,14 @@ final class AppModel {
     }
 
     func appDidEnterBackground() {
+        feedback.setAmbience(false)
         online.disconnect()
+    }
+
+    /// Starts or stops the ambient bed as the Ambient Sound and Sound Effects settings say. The
+    /// Settings screen calls it when either toggle changes; the app does when it becomes active.
+    func ambienceSettingDidChange() {
+        feedback.setAmbience(settings.ambientSoundEnabled && settings.soundEnabled)
     }
 
     // MARK: Push notifications

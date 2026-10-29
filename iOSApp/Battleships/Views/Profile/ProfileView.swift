@@ -77,6 +77,28 @@ struct ProfileView: View {
                     Toggle(isOn: Bindable(app.settings).hapticsEnabled) {
                         Label("Haptics", systemImage: "iphone.radiowaves.left.and.right")
                     }
+                    if app.settings.hapticsEnabled {
+                        hapticStrengthRow
+                    }
+                    Picker(selection: Bindable(app.settings).effectsLevel) {
+                        ForEach(EffectsLevel.allCases) { level in
+                            Text(level.displayName).tag(level)
+                        }
+                    } label: {
+                        Label("Effects", systemImage: "sparkles")
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityLabel("Visual Effects")
+                    Toggle(isOn: Bindable(app.settings).screenShakeEnabled) {
+                        Label("Screen Shake", systemImage: "arrow.left.and.right")
+                    }
+                    Toggle(isOn: Bindable(app.settings).flashesEnabled) {
+                        Label("Flashes", systemImage: "bolt.fill")
+                    }
+                    .accessibilityLabel("Bright Flashes")
+                    Toggle(isOn: Bindable(app.settings).ambientSoundEnabled) {
+                        Label("Ambient Sound", systemImage: "water.waves")
+                    }
                     notificationsRow
                     NavigationLink {
                         ServerSettingsView()
@@ -208,6 +230,18 @@ struct ProfileView: View {
             }
         case nil:
             EmptyView()
+        }
+    }
+
+    /// How hard the haptics play, from a tap to a thump. Only shown while haptics are on.
+    private var hapticStrengthRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Haptic Strength", systemImage: "slider.horizontal.3")
+                // The slider carries the same label for VoiceOver.
+                .accessibilityHidden(true)
+            Slider(value: Bindable(app.settings).hapticStrength, in: 0...1, step: 0.25) {
+                Text("Haptic Strength")
+            }
         }
     }
 
