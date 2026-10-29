@@ -130,7 +130,8 @@ struct BattleHUD<MiniMap: View>: View {
     @Environment(\.motionPolicy) private var policy
     @AccessibilityFocusState private var isHeadlineFocused: Bool
 
-    private static let cornerRadius: CGFloat = 22
+    /// A computed constant: a generic type can't hold a static stored one.
+    private static var cornerRadius: CGFloat { 22 }
 
     var body: some View {
         Group {

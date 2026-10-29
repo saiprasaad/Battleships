@@ -176,6 +176,8 @@ struct SkyPalette: Equatable, Sendable {
 enum DayCycle {
     /// A palette to use instead of the clock's, for screenshots and tests (`ScreenshotTests` set `.day`).
     @MainActor static var fixedPalette: SkyPalette?
+    /// How often `SkyClock` reads the clock, in seconds: minutes, not seconds, even in the still tier.
+    static let clockTick: TimeInterval = 60
 
     static func palette(at date: Date, calendar: Calendar = .current) -> SkyPalette {
         let components = calendar.dateComponents([.hour, .minute], from: date)
@@ -225,11 +227,8 @@ extension EnvironmentValues {
 struct SkyClock<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
-    /// How often the clock is read, in seconds: minutes, not seconds, even in the still tier.
-    private static let tick: TimeInterval = 60
-
     var body: some View {
-        TimelineView(.periodic(from: Date(), by: Self.tick)) { context in
+        TimelineView(.periodic(from: Date(), by: DayCycle.clockTick)) { context in
             content()
                 .environment(\.skyPalette, DayCycle.fixedPalette ?? DayCycle.palette(at: context.date))
         }
