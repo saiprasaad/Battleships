@@ -41,69 +41,12 @@ struct LobbyView: View {
     /// Set while the hero button's recoil is being seen before the sheet slides up.
     @State private var isHandingOff = false
 
+    /// Covered by a sheet: the list dims and its sea holds still.
+    private var isCovered: Bool { newGame != nil || showsSignIn }
+
     var body: some View {
-        let isCovered = newGame != nil || showsSignIn
         NavigationStack(path: $path) {
-            // Each section is its own declaration: one list body held every row and the type
-            // checker gave up on it.
-            List {
-                heroSection
-                noticeSection
-                gameSections
-                if groups.isEmpty {
-                    Section {
-                        emptyState
-                            .animation(Motion.Curve.phase.policy(policy), value: isLoadingOnlineGames)
-                            .listRowBackground(Color.clear)
-                    }
-                }
-            }
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background { OceanBackdrop(isAnimated: !isCovered) }
-            .animation(Motion.Curve.list.policy(policy), value: groups)
-            // The host dims a fifth while a sheet is up, so the glass reads as glass.
-            .overlay {
-                Color.black
-                    .opacity(isCovered ? 0.2 : 0)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-            }
-            .animation(Motion.Curve.fade.policy(policy), value: isCovered)
-            .navigationTitle("Battleships")
-            .navigationDestination(for: GameRoute.self) { route in
-                BattleView(route: route, app: app)
-            }
-            // A rematch: Deploy Your Fleet pushed in place, with the "vs …" chip over its board. An
-            // error thrown here sails the ships back and shows the deploy screen's own toast.
-            .navigationDestination(item: $deploy) { draft in
-                FleetPlacementView(
-                    mode: draft.mode,
-                    confirmTitle: NewGameSheet.confirmTitle(for: draft),
-                    opponentDisplayName: draft.opponentDisplayName
-                ) { fleet in
-                    try await startRematch(draft, fleet: fleet)
-                }
-            }
-            .refreshable {
-                await app.online.refresh()
-                // The rows fan in again; on the main actor whatever context the refresh runs in.
-                await MainActor.run { rowEntrance.restart() }
-            }
-            .toolbar {
-                if app.isSignedIn {
-                    ToolbarItem(placement: .topBarLeading) {
-                        ConnectionBadge(connection: app.online.connection)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        presentNewBattle(afterHandoff: false)
-                    } label: {
-                        Label("New Battle", systemImage: "plus")
-                    }
-                }
-            }
+            navigatedList
             .sheet(item: $newGame) { request in
                 NewGameSheet(draft: request.draft) { route in
                     newGame = nil
@@ -172,6 +115,73 @@ struct LobbyView: View {
                 app.session.clearRatingDelta()
             }
         }
+    }
+
+    /// The list and its sea. Its chrome and the sheets are separate declarations because one
+    /// chain of modifiers is more than the type checker takes in reasonable time.
+    private var lobbyList: some View {
+        List {
+            heroSection
+            noticeSection
+            gameSections
+            if groups.isEmpty {
+                Section {
+                    emptyState
+                        .animation(Motion.Curve.phase.policy(policy), value: isLoadingOnlineGames)
+                        .listRowBackground(Color.clear)
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background { OceanBackdrop(isAnimated: !isCovered) }
+        .animation(Motion.Curve.list.policy(policy), value: groups)
+        // The host dims a fifth while a sheet is up, so the glass reads as glass.
+        .overlay {
+            Color.black
+                .opacity(isCovered ? 0.2 : 0)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+        }
+        .animation(Motion.Curve.fade.policy(policy), value: isCovered)
+    }
+
+    private var navigatedList: some View {
+        lobbyList
+            .navigationTitle("Battleships")
+            .navigationDestination(for: GameRoute.self) { route in
+                BattleView(route: route, app: app)
+            }
+            // A rematch: Deploy Your Fleet pushed in place, with the "vs …" chip over its board. An
+            // error thrown here sails the ships back and shows the deploy screen's own toast.
+            .navigationDestination(item: $deploy) { draft in
+                FleetPlacementView(
+                    mode: draft.mode,
+                    confirmTitle: NewGameSheet.confirmTitle(for: draft),
+                    opponentDisplayName: draft.opponentDisplayName
+                ) { fleet in
+                    try await startRematch(draft, fleet: fleet)
+                }
+            }
+            .refreshable {
+                await app.online.refresh()
+                // The rows fan in again; on the main actor whatever context the refresh runs in.
+                await MainActor.run { rowEntrance.restart() }
+            }
+            .toolbar {
+                if app.isSignedIn {
+                    ToolbarItem(placement: .topBarLeading) {
+                        ConnectionBadge(connection: app.online.connection)
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        presentNewBattle(afterHandoff: false)
+                    } label: {
+                        Label("New Battle", systemImage: "plus")
+                    }
+                }
+            }
     }
 
     private var heroSection: some View {
