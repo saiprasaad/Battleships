@@ -175,7 +175,8 @@ struct ScreenshotTests {
     }
 
     /// Shows `make()`'s view, waits `settle` seconds, runs its action, then saves frames for `seconds`.
-    private func filmstrip(
+    /// Workstreams add their own strips as `@Test` methods in `extension ScreenshotTests` files.
+    func filmstrip(
         _ name: String,
         to directory: URL,
         seconds: Double,
@@ -237,7 +238,7 @@ struct ScreenshotTests {
         window.rootViewController = nil
     }
 
-    private func capture(
+    func capture(
         _ view: some View,
         _ name: String,
         to directory: URL,
@@ -276,7 +277,7 @@ struct ScreenshotTests {
 }
 
 /// A solid, unmistakable card between filmstrips, for finding them in a video of the simulator.
-private struct FilmstripMarker: View {
+struct FilmstripMarker: View {
     let title: String
     let color: Color
 
@@ -293,12 +294,12 @@ private struct FilmstripMarker: View {
 /// A switch a filmstrip flips after its first frame, e.g. to bring in the game-over card.
 @MainActor
 @Observable
-private final class ShowsOutcome {
+final class ShowsOutcome {
     var isOn = false
 }
 
 /// The end of a battle arriving over the ocean, for the victory and defeat filmstrips.
-private struct OutcomeStrip: View {
+struct OutcomeStrip: View {
     let shows: ShowsOutcome
     let didWin: Bool
     let opponent: String
