@@ -52,7 +52,7 @@ extension ScreenshotTests {
 
         // The sheet's pickers: the selection frame slides to Friend and back to Computer, the
         // difficulty thumb slides to Admiral and back to Captain with its chevrons lighting.
-        try await filmstrip("sheet-pickers", to: output, seconds: 3.0) {
+        try await filmstrip("sheet-pickers", to: output, seconds: 3.8) {
             let probe = PickerProbe()
             return (
                 AnyView(SheetPickersStrip(probe: probe).environment(app)),
