@@ -649,7 +649,7 @@ struct BattleView: View {
         if shells.contains(where: { $0.outcome == .misfire }) { return .misfire }
         if controller.isTransmitting { return .transmitting }
         if !shells.isEmpty { return .firing }
-        if controller.opening != nil { return .opening }
+        if controller.opening != nil || controller.awaitsOpening { return .opening }
         return controller.isMyTurn ? .aiming : .standBy
     }
 
@@ -678,7 +678,7 @@ struct BattleView: View {
     /// has ended (BAT-15).
     private var showsCoachMark: Bool {
         !app.settings.hasSeenAimCoachMark && controller.phase == .battle && controller.isMyTurn
-            && controller.opening == nil && controller.aimed == nil && !controller.isCatchingUp
+            && controller.opening == nil && !controller.awaitsOpening && controller.aimed == nil && !controller.isCatchingUp
             && controller.perspective?.myShots.isEmpty == true
     }
 

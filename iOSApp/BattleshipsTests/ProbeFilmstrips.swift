@@ -6,9 +6,9 @@ import SwiftUI
 import Testing
 @testable import Battleships
 
-/// Strips that measure the stage rather than the game, for reading the others: how SwiftUI's own
-/// animations and transitions progress on CI's simulator, and what the Match Found opening costs on
-/// its own and under a battle. Cut from CI's video like `renderFilmstrips()`'s strips; the timeline's
+/// A strip that measures the stage rather than the game, for reading the others (how SwiftUI's own
+/// animations and transitions progress on CI's simulator), and the opening of an online game found
+/// while the player was away. Cut from CI's video like `renderFilmstrips()`'s strips; the timeline's
 /// stalls say what the main thread was doing.
 extension ScreenshotTests {
     @Test(.enabled(if: ScreenshotTests.directory != nil))
@@ -24,31 +24,13 @@ extension ScreenshotTests {
             return (AnyView(AnimationProbe(probe: probe)), nil, { @MainActor in probe.isOn = true })
         }
 
-        // The Match Found card alone, over the ocean: an opponent found half a second in.
+        // An online game found while the player was away, opened from the lobby: BATTLE STATIONS
+        // without the Match Found card, and the coach mark only once the board is live.
         let searching = BattleStripGame.make(status: .matchmaking, opponent: nil, turn: nil, moves: [], fleet: Rules.classic.randomFleet())
-        let found = BattleStripGame.found(searching, opponent: "nemo")
-        try await filmstrip("probe-match-card", to: output, seconds: 3.6) {
-            app.online.apply(searching)
-            let controller = BattleController(route: .online(searching.id), app: app)
-            controller.viewDidAppear()
-            return (
-                AnyView(ZStack { OceanBackdrop(); BattleOpening(controller: controller) }.environment(app)),
-                controller,
-                {
-                    Task {
-                        try? await Task.sleep(for: .milliseconds(500))
-                        app.online.apply(found)
-                    }
-                }
-            )
-        }
-
-        // The battle of a game found before the screen opened: BATTLE STATIONS without the card.
-        let searching2 = BattleStripGame.make(status: .matchmaking, opponent: nil, turn: nil, moves: [], fleet: Rules.classic.randomFleet())
-        let found2 = BattleStripGame.found(searching2, opponent: "drake")
-        try await filmstrip("probe-found-battle", to: output, seconds: 3.0) {
-            app.online.apply(found2)
-            return (AnyView(NavigationStack { BattleView(route: .online(found2.id), app: app) }.environment(app)), nil, {})
+        let found = BattleStripGame.found(searching, opponent: "drake")
+        try await filmstrip("battle-opening-online", to: output, seconds: 3.0) {
+            app.online.apply(found)
+            return (AnyView(NavigationStack { BattleView(route: .online(found.id), app: app) }.environment(app)), nil, {})
         }
     }
 }

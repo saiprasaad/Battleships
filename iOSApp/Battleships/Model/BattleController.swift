@@ -601,6 +601,13 @@ final class BattleController {
         isMyTurn && aimed != nil && !isSubmitting
     }
 
+    /// A battle with no moves yet that hasn't had its first look: its opening starts with that look
+    /// (`syncMoves()`), so the screen shows the opening's readout from its first frame rather than
+    /// offering a shot and a coach mark for the frame before BATTLE STATIONS.
+    var awaitsOpening: Bool {
+        phase == .battle && !hasOpened && perspective?.moves.isEmpty == true
+    }
+
     /// A beat during which the player can't fire: the opening, their own shell in the air, the enemy's
     /// on its way, or the opponent's shots being replayed.
     private var isSequenceClosingInput: Bool {
