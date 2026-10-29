@@ -232,7 +232,10 @@ struct BattleHUD<MiniMap: View>: View {
         let shape = RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
         let flashes = policy.allowsFlashes
         return OneShot(trigger: cues.hitsTaken, duration: flashes ? HUDBeat.edgeFlash : HUDBeat.edgeGlow, curve: Easing.linear) { progress in
-            let hit: Double = progress < 1 ? (flashes ? 0.9 * (1 - progress) : 0.5 * sin(.pi * progress)) : 0
+            let remaining: Double = max(0, 1 - progress)
+            let flashHit: Double = 0.9 * remaining
+            let glowHit: Double = 0.5 * sin(.pi * min(progress, 1))
+            let hit: Double = progress < 1 ? (flashes ? flashHit : glowHit) : 0
             shape
                 .strokeBorder(Theme.hit.opacity(hit), lineWidth: 1.5)
                 .overlay {
@@ -620,7 +623,8 @@ private struct RosterPip: View {
     }
 
     private var width: CGFloat {
-        isCompact ? max(8, CGFloat(ship.kind.length) * 5) : max(11, CGFloat(ship.kind.length) * 7)
+        let length = CGFloat(ship.kind.length)
+        return isCompact ? max(8, length * 5) : max(11, length * 7)
     }
 }
 

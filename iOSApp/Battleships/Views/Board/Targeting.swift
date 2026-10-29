@@ -100,11 +100,13 @@ private struct LaserDashes: View {
                 let length = min(cell * 0.9, arm.reach)
                 let travel = max(0, arm.reach - length)
                 let distance = cell / 2 + length / 2 + travel * (1 - CGFloat(progress))
+                let size: CGSize = arm.dx == 0 ? CGSize(width: 1.5, height: length) : CGSize(width: length, height: 1.5)
+                let visible: Double = arm.reach > cell * 0.3 ? 0.9 * fade : 0
                 Capsule()
                     .fill(Theme.reticle)
-                    .frame(width: arm.dx == 0 ? 1.5 : length, height: arm.dx == 0 ? length : 1.5)
+                    .frame(width: size.width, height: size.height)
                     .offset(x: arm.dx * distance, y: arm.dy * distance)
-                    .opacity(arm.reach > cell * 0.3 ? 0.9 * fade : 0)
+                    .opacity(visible)
             }
         }
     }

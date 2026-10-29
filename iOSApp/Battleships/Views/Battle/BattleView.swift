@@ -122,31 +122,42 @@ struct BattleView: View {
         .toolbar { toolbarContent }
     }
 
-    private var observedStage: some View {
+    /// The stage watching the controller: moves, news, outcome, mood and the fleet's state.
+    private var controllerObservedStage: some View {
         stage
-        .task { await controller.load() }
-        .onChange(of: controller.perspective?.moves.count) { controller.syncMoves() }
-        .onChange(of: controller.perspective?.outcome) { controller.syncMoves() }
-        .onChange(of: controller.spokenAnnouncement) { speak() }
-        .onChange(of: controller.announcement) { updateBanner() }
-        .onChange(of: controller.errorMessage) { showError() }
-        .onChange(of: controller.showsOutcome) { outcomeDidChange() }
-        .onChange(of: controller.opening) { openingDidChange() }
-        .onChange(of: controller.mood) { moodDidChange() }
-        .onChange(of: controller.headline, initial: true) { rememberBattleLook() }
-        .onChange(of: controller.statusLine, initial: true) { rememberBattleLook() }
-        .onChange(of: controller.isEnemyOnLastShip) {
-            if controller.isEnemyOnLastShip, controller.phase == .battle {
-                show(.lastShip(isMine: false))
+            .task { await controller.load() }
+            .onChange(of: controller.perspective?.moves.count) { controller.syncMoves() }
+            .onChange(of: controller.perspective?.outcome) { controller.syncMoves() }
+            .onChange(of: controller.spokenAnnouncement) { speak() }
+            .onChange(of: controller.announcement) { updateBanner() }
+            .onChange(of: controller.errorMessage) { showError() }
+            .onChange(of: controller.showsOutcome) { outcomeDidChange() }
+            .onChange(of: controller.opening) { openingDidChange() }
+            .onChange(of: controller.mood) { moodDidChange() }
+    }
+
+    /// The headline, the last ship, hits taken and aiming, in a chain of their own.
+    private var fleetObservedStage: some View {
+        controllerObservedStage
+            .onChange(of: controller.headline, initial: true) { rememberBattleLook() }
+            .onChange(of: controller.statusLine, initial: true) { rememberBattleLook() }
+            .onChange(of: controller.isEnemyOnLastShip) {
+                if controller.isEnemyOnLastShip, controller.phase == .battle {
+                    show(.lastShip(isMine: false))
+                }
             }
-        }
-        .onChange(of: controller.hitsTaken) { noteOwnFleet() }
-        .onChange(of: controller.aimed) {
-            if controller.aimed != nil {
-                app.settings.hasSeenAimCoachMark = true
+            .onChange(of: controller.hitsTaken) { noteOwnFleet() }
+            .onChange(of: controller.aimed) {
+                if controller.aimed != nil {
+                    app.settings.hasSeenAimCoachMark = true
+                }
             }
-        }
-        .onChange(of: showsCoachMark) { announceCoachMark() }
+            .onChange(of: showsCoachMark) { announceCoachMark() }
+    }
+
+    /// The screen's own state: phases, the scene, covers, the fleet sheet, the policy, and appearing.
+    private var observedStage: some View {
+        fleetObservedStage
         .onChange(of: phaseKey, initial: true) { noteBattlefield() }
         .onChange(of: phaseKey) {
             if phaseKey == .battlefield {

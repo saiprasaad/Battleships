@@ -136,7 +136,10 @@ struct FlameMark: View {
         let flicker: Double = time.map { 0.5 + 0.5 * sin($0 * rhythm.speed * 2 * .pi + rhythm.phase) } ?? 0.5
         let flare: Double = policy.allowsFlashes ? min(1, max(0, self.flare)) : 0
         // Typed up front: arithmetic inside a modifier is what the type checker is slowest on.
-        let haloScale: CGFloat = CGFloat((0.92 + 0.16 * flicker) * (1 + 0.4 * flare)) * (showsHalo ? 1 : 0.7)
+        let breathing: Double = 0.92 + 0.16 * flicker
+        let flaring: Double = 1 + 0.4 * flare
+        let haloShare: Double = showsHalo ? 1 : 0.7
+        let haloScale = CGFloat(breathing * flaring * haloShare)
         let emberSize: CGFloat = max(1, cell * 0.06 * scale)
         let flameX: CGFloat = CGFloat(1.04 - 0.1 * flicker)
         let flameY: CGFloat = CGFloat(0.94 + 0.14 * flicker)

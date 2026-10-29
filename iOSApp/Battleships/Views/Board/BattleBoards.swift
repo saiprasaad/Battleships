@@ -540,7 +540,9 @@ private struct ShipsLayer: View {
 
         // The damage list: 2.5° a hit, alternating sides, capped; nothing once the hull is a wreck.
         let hits = state.hitCells.count
-        let damageList = state.isSunk || hits == 0 ? 0 : min(Self.listCap, Self.listPerHit * Double(hits)) * (hits % 2 == 0 ? -1 : 1)
+        let listSide: Double = hits % 2 == 0 ? -1 : 1
+        let listAmount: Double = min(Self.listCap, Self.listPerHit * Double(hits))
+        let damageList: Double = state.isSunk || hits == 0 ? 0 : listAmount * listSide
 
         // The sail-in and the swell.
         let sail = sailOffset(of: ship, index: index, effectTime: effectTime, clock: clock)
