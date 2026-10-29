@@ -304,13 +304,49 @@ extension View {
     func shakes(on trigger: Int, amplitude: CGFloat = 7, amplitudeY: CGFloat? = nil, roll: Double = 0.5) -> some View {
         modifier(ShakeEffect(trigger: trigger, amplitude: amplitude, amplitudeY: amplitudeY, roll: roll))
     }
+
+    /// The hit-stop punch of a board taking a landing: scale 1.03 in 50 ms and a spring back to 1,
+    /// each time `trigger` changes (the board's count of landings). The full tier only.
+    func landingPunch(on trigger: Int) -> some View {
+        modifier(LandingPunch(trigger: trigger))
+    }
+}
+
+/// The punch's beat: up, then the spring home.
+private enum PunchBeat {
+    static let up: TimeInterval = 0.05
+    static let settle: TimeInterval = 0.25
+    static let scale: CGFloat = 1.03
+}
+
+/// BAT-2's punch: the board grows to 1.03 as the landing's hit-stop freezes its effects, and springs
+/// back. Nothing below the full tier.
+struct LandingPunch: ViewModifier {
+    let trigger: Int
+    @Environment(\.motionPolicy) private var policy
+
+    func body(content: Content) -> some View {
+        let peak: CGFloat = policy.tier == .full ? PunchBeat.scale : 1
+        KeyframeAnimator(initialValue: CGFloat(1), trigger: trigger) { scale in
+            content.scaleEffect(scale)
+        } keyframes: { _ in
+            KeyframeTrack {
+                CubicKeyframe(peak, duration: PunchBeat.up)
+                SpringKeyframe(1, duration: PunchBeat.settle, spring: .bouncy)
+            }
+        }
+    }
 }
 
 /// A red pulse around the edges of the screen when the player's fleet is hit, to a peak of 0.75 with
 /// a red/cyan split on its edge for the first 120 ms. Without flashes (the reduced and still tiers,
-/// Dim Flashing Lights, the Flashes setting off) the edges glow up gently to 0.35 instead.
+/// Dim Flashing Lights, the Flashes setting off) the edges glow up gently to 0.35 instead. While
+/// `holdsRed` is set (the finale of a lost battle, FIN-1) the edges hold at 0.5 (0.35 without
+/// flashes) for `holdLength` and then fade.
 struct DamageFlash: View {
     let trigger: Int
+    /// The fleet is lost: the edges hold red for a moment rather than pulsing.
+    var holdsRed = false
     @State private var intensity = 0.0
     @State private var isSplitting = false
     @Environment(\.motionPolicy) private var policy
@@ -319,6 +355,11 @@ struct DamageFlash: View {
     static let peak = 0.75
     /// The gentle variant's.
     static let gentlePeak = 0.35
+    /// The held red of a lost finale, with and without flashes.
+    static let holdPeak = 0.5
+    static let gentleHoldPeak = 0.35
+    /// How long the held red lasts.
+    static let holdLength: TimeInterval = 1.2
     /// How far the split samples red and blue from the pixel.
     static let splitOffset = CGSize(width: 3, height: 0)
     /// How long the split lasts after a hit.
@@ -358,6 +399,19 @@ struct DamageFlash: View {
                     try? await Task.sleep(for: .milliseconds(450))
                 }
                 withAnimation(.easeOut(duration: isSharp ? 0.8 : 1.2)) {
+                    intensity = 0
+                }
+            }
+        }
+        .onChange(of: holdsRed) { _, holds in
+            guard holds else { return }
+            let peak = policy.allowsFlashes ? DamageFlash.holdPeak : DamageFlash.gentleHoldPeak
+            withAnimation(Motion.Curve.state) {
+                intensity = peak
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(DamageFlash.holdLength))
+                withAnimation(Motion.Curve.fade) {
                     intensity = 0
                 }
             }

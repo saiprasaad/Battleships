@@ -4,18 +4,28 @@ import SwiftUI
 /// Every live effect on one board, drawn by one timeline and one Canvas: the ring closing on a cell
 /// through the last moments of a shell's flight, the bursts where shells landed, the enemy's
 /// telegraphed shell (a shadow drifting toward the cell, then the falling streak), the water boiling
-/// and the slick spreading under a sinking hull with the chain of secondary blasts along it, and the
-/// rings of the final blow. It reads the board's `FXClock`, so a hit-stop freezes everything on the
-/// board at once and the finale's slow motion stretches it all. Everything is a function of the dates
-/// the controller publishes, so a view recreated mid-burst (a size-class swap, the Fleet sheet)
-/// resumes at the right frame. Particle lists are built once per effect, seeded by the effect's id,
-/// and cached; the timeline pauses when nothing is live.
+/// and the slick spreading under a sinking hull with the chain of secondary blasts along it, the
+/// smoke and ember pops of burning cells, the pulse marking the latest shot, the wakes of the fleet
+/// sailing in, and the rings of the final blow and of the fleet surfacing after it. It reads the
+/// board's `FXClock`, so a hit-stop freezes everything on the board at once and the finale's slow
+/// motion stretches it all. Everything is a function of the dates the controller publishes, so a view
+/// recreated mid-burst (a size-class swap, the Fleet sheet) resumes at the right frame. Particle lists
+/// are built once per effect, seeded by the effect's id, and cached; the timeline pauses when nothing
+/// is live and runs at the scenery rate when only smoke is.
 struct EffectsLayer: View {
     let geometry: BoardGeometry
     let board: BoardSide
     let controller: BattleController
-    /// The mini map: bursts, the telegraph and the rings only; no bubbles, slick or secondaries.
+    /// The mini map: bursts, the telegraph, the marker and the rings only; no bubbles, slick,
+    /// secondaries, smoke or wakes.
     var isMiniature = false
+    /// The cells of this board that are burning (a hit on a ship still afloat): smoke and ember pops
+    /// rise from them on full-size boards, clipped to the cell on the target board.
+    var burningCells: [Coordinate] = []
+    /// The player's fleet, in sailing order, for the wakes of the sail-in on the full-size home board.
+    var fleet: [ShipPlacement] = []
+    /// The enemy ships surfacing after the final blow, in the order they rise (the target board).
+    var surfacingShips: [ShipPlacement] = []
 
     @Environment(\.motionPolicy) private var policy
     /// Each impact's particles, by its id.
@@ -23,13 +33,26 @@ struct EffectsLayer: View {
     /// Each sinking's bubbles and blasts, by its id.
     @State private var sinkingPlans: [UUID: SinkingPlan] = [:]
     @State private var finalePlan: FinalePlan?
+    /// Each burning cell's smoke and embers.
+    @State private var smokePlans: [Coordinate: SmokePlan] = [:]
+    /// Each sailing ship's wake, and each surfacing ship's rings.
+    @State private var wakePlans: [ShipPlacement: [Particle]] = [:]
+    @State private var fleetPlans: [ShipPlacement: [Particle]] = [:]
+    /// When the latest shot on this board landed, for the marker's pulse; nil shows a static ring.
+    @State private var markerStart: Date?
     /// Something is live, so the timeline runs. Cleared once the last effect has played out.
     @State private var isAwake = false
 
     /// Wall-clock slack past an effect's nominal end, for the hit-stops and slow motion that stretch it.
     static let slack: TimeInterval = 1.2
-    /// How long the final blow's rings play.
-    static let finaleLength: TimeInterval = 2
+    /// How long the final blow's rings and the surfacing fleet play, in effect time.
+    static let finaleLength: TimeInterval = 4.2
+    /// How long the latest shot's marker pulses before it settles to a ring.
+    static let markerPulse: TimeInterval = 6
+    /// One pulse of the marker.
+    static let markerPeriod: TimeInterval = 1.2
+    /// From a sinking's start to the hull's reveal rings on the target board.
+    static let revealDelay: TimeInterval = 0.12
 
     var body: some View {
         let shells = controller.shells.filter { $0.board == board }
@@ -37,13 +60,26 @@ struct EffectsLayer: View {
         let telegraph: Telegraph? = board == .home ? controller.telegraph : nil
         let sinkings = controller.sinkings.filter { $0.board == board }
         let finale: Finale? = controller.finale.flatMap { $0.board == board ? $0 : nil }
+        let opening: BattleController.Opening? = board == .home && !isMiniature ? controller.opening : nil
+        let latestShot = board == .target ? controller.latestOwnShot : controller.latestEnemyShot
+        let showsMarker = latestShot != nil && !(board == .target && controller.aimed != nil)
         let clock = board == .target ? controller.targetClock : controller.homeClock
-        let liveUntil = EffectsLayer.liveUntil(shells: shells, impacts: impacts, telegraph: telegraph, sinkings: sinkings, finale: finale)
-        let keys = EffectKeys(impacts: impacts.map(\.id), sinkings: sinkings.map(\.id), finale: finale?.start)
+        let burning = isMiniature || !policy.allowsParticles ? [] : burningCells
+        let liveUntil = EffectsLayer.liveUntil(
+            shells: shells, impacts: impacts, telegraph: telegraph, sinkings: sinkings, finale: finale,
+            opening: opening, markerStart: showsMarker ? markerStart : nil
+        )
+        let keys = EffectKeys(
+            impacts: impacts.map(\.id), sinkings: sinkings.map(\.id), finale: finale?.start,
+            burning: burning, fleet: opening == nil ? [] : fleet, surfacing: finale == nil ? [] : surfacingShips
+        )
+        let smokes = !burning.isEmpty
+        let isLive = isAwake || smokes
+        let interval = isAwake ? policy.effectsInterval : (policy.sceneryInterval ?? policy.effectsInterval)
         let side = geometry.gutter + geometry.gridSide
         ZStack(alignment: .topLeading) {
-            if isAwake, liveUntil != nil {
-                EffectTimeline(clock: clock, frameInterval: policy.effectsInterval) { effectTime in
+            if isLive {
+                EffectTimeline(clock: clock, frameInterval: interval) { effectTime in
                     let frame = makeFrame(
                         at: effectTime,
                         clock: clock,
@@ -51,11 +87,19 @@ struct EffectsLayer: View {
                         impacts: impacts,
                         telegraph: telegraph,
                         sinkings: sinkings,
-                        finale: finale
+                        finale: finale,
+                        opening: opening,
+                        burning: burning,
+                        marker: showsMarker ? latestShot : nil
                     )
                     Canvas(rendersAsynchronously: true) { context, _ in
                         EffectsLayer.draw(frame, in: &context)
                     }
+                }
+            } else if showsMarker, let latestShot {
+                // Nothing moves: the marker's ring alone, drawn once.
+                Canvas { context, _ in
+                    EffectsLayer.drawMarker(center: geometry.center(of: latestShot), cell: geometry.cell, pulse: nil, in: &context)
                 }
             }
         }
@@ -75,7 +119,10 @@ struct EffectsLayer: View {
             isAwake = false
         }
         .onChange(of: keys, initial: true) { _, _ in
-            cachePlans(impacts: impacts, sinkings: sinkings, finale: finale, allImpacts: controller.impacts)
+            cachePlans(impacts: impacts, sinkings: sinkings, finale: finale, allImpacts: controller.impacts, burning: burning, fleet: keys.fleet, surfacing: keys.surfacing)
+        }
+        .onChange(of: latestShot) { _, shot in
+            markerStart = shot == nil ? nil : Date()
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -113,10 +160,26 @@ struct EffectsLayer: View {
             var blasts: [Burst]
         }
 
-        struct Surfacing: Sendable {
+        /// Particles playing from a point: the final blow's rings, a hull surfacing, a wake.
+        struct Emission: Sendable {
             var center: CGPoint
             var elapsed: TimeInterval
             var particles: [Particle]
+        }
+
+        struct Smoke: Sendable {
+            var center: CGPoint
+            /// The cell's rect on the target board, where the smoke stays inside its cell.
+            var clip: CGRect?
+            var elapsed: TimeInterval
+            var puffs: [Particle]
+            var embers: [Particle]
+        }
+
+        struct Marker: Sendable {
+            var center: CGPoint
+            /// 0…1 through the current pulse; nil once the marker has settled.
+            var pulse: Double?
         }
 
         var cell: CGFloat
@@ -130,7 +193,10 @@ struct EffectsLayer: View {
         var bursts: [Burst] = []
         var incoming: Incoming?
         var boils: [Boil] = []
-        var finale: Surfacing?
+        var smokes: [Smoke] = []
+        var emissions: [Emission] = []
+        var wakes: [Emission] = []
+        var marker: Marker?
 
         /// The moment of a burst the still tier shows.
         static let stillElapsed: TimeInterval = 0.3
@@ -141,20 +207,31 @@ struct EffectsLayer: View {
         var impacts: [UUID]
         var sinkings: [UUID]
         var finale: Date?
+        var burning: [Coordinate]
+        var fleet: [ShipPlacement]
+        var surfacing: [ShipPlacement]
     }
 
-    /// A sinking's particles: the bubbles under the hull, and a secondary blast for each of its cells.
+    /// A sinking's particles: the bubbles under the hull, a secondary blast for each of its cells, and
+    /// the rings of the hull surfacing into view (the target board's reveal).
     struct SinkingPlan: Equatable, Sendable {
         var cells: [Coordinate]
         /// Where the shell that sank it struck; the blasts walk out from here.
         var hitIndex: Int
         var bubbles: [Particle]
         var blasts: [[Particle]]
+        var reveal: [Particle]
     }
 
     struct FinalePlan: Equatable, Sendable {
         var start: Date
         var rings: [Particle]
+    }
+
+    /// A burning cell's looping smoke and embers.
+    struct SmokePlan: Equatable, Sendable {
+        var puffs: [Particle]
+        var embers: [Particle]
     }
 
     private func makeFrame(
@@ -164,7 +241,10 @@ struct EffectsLayer: View {
         impacts: [Impact],
         telegraph: Telegraph?,
         sinkings: [Sinking],
-        finale: Finale?
+        finale: Finale?,
+        opening: BattleController.Opening?,
+        burning: [Coordinate],
+        marker: Coordinate?
     ) -> Frame {
         let isStill = policy.tier == .still
         var frame = Frame(
@@ -224,7 +304,41 @@ struct EffectsLayer: View {
                         particles: plan.blasts[index]
                     ))
                 }
-                frame.boils.append(Frame.Boil(rect: geometry.rect(for: sinking.ship), elapsed: elapsed, bubbles: plan.bubbles, blasts: blasts))
+                let rect = geometry.rect(for: sinking.ship)
+                frame.boils.append(Frame.Boil(rect: rect, elapsed: elapsed, bubbles: plan.bubbles, blasts: blasts))
+                // The hull breaking the surface on enemy waters, where it had never been seen.
+                if board == .target, !isStill, elapsed >= EffectsLayer.revealDelay {
+                    frame.emissions.append(Frame.Emission(center: CGPoint(x: rect.midX, y: rect.midY), elapsed: elapsed - EffectsLayer.revealDelay, particles: plan.reveal))
+                }
+            }
+
+            for cell in burning {
+                guard let plan = smokePlans[cell] else { continue }
+                let period = Emitters.smokePeriod
+                let looped = period + effectTime.truncatingRemainder(dividingBy: period)
+                frame.smokes.append(Frame.Smoke(
+                    center: geometry.center(of: cell),
+                    clip: board == .target ? geometry.rect(for: cell) : nil,
+                    elapsed: looped,
+                    puffs: plan.puffs,
+                    embers: plan.embers
+                ))
+            }
+
+            if case let .playing(start)? = opening, !isStill {
+                let sailStart = clock.time(at: start)
+                for (index, ship) in fleet.enumerated() {
+                    let elapsed = effectTime - (sailStart + SailIn.start(of: index))
+                    guard elapsed >= 0, elapsed < SailIn.wakeLength, let particles = wakePlans[ship] else { continue }
+                    let progress = SailIn.progress(index: index, since: sailStart, at: effectTime)
+                    let offset = SailIn.offset(of: ship, geometry: geometry, progress: progress)
+                    let stern = SailIn.stern(of: ship, geometry: geometry)
+                    frame.wakes.append(Frame.Emission(
+                        center: CGPoint(x: stern.x + offset.width, y: stern.y + offset.height),
+                        elapsed: elapsed,
+                        particles: particles
+                    ))
+                }
             }
         }
 
@@ -232,18 +346,40 @@ struct EffectsLayer: View {
             let elapsed = effectTime - clock.time(at: finale.start)
             if elapsed >= 0, elapsed < EffectsLayer.finaleLength {
                 let cached = finalePlan.flatMap { $0.start == finale.start ? $0.rings : nil }
-                frame.finale = Frame.Surfacing(
+                frame.emissions.append(Frame.Emission(
                     center: geometry.center(of: finale.coordinate),
                     elapsed: elapsed,
                     particles: cached ?? Emitters.surfaceRings(center: .zero, seed: EffectsLayer.seed(for: finale))
-                )
+                ))
+                if finale.didWin, board == .target, !isStill {
+                    for (index, ship) in surfacingShips.enumerated() {
+                        let rise = elapsed - (Timing.fleetSurfaceStart + Double(index) * Timing.Stagger.surfacing)
+                        guard rise >= 0, let particles = fleetPlans[ship] else { continue }
+                        let rect = geometry.rect(for: ship)
+                        frame.emissions.append(Frame.Emission(center: CGPoint(x: rect.midX, y: rect.midY), elapsed: rise, particles: particles))
+                    }
+                }
             }
+        }
+
+        if let marker {
+            var pulse: Double?
+            if !isStill, let markerStart {
+                let since = effectTime - clock.time(at: markerStart)
+                if since >= 0, since < EffectsLayer.markerPulse {
+                    pulse = since.truncatingRemainder(dividingBy: EffectsLayer.markerPeriod) / EffectsLayer.markerPeriod
+                }
+            }
+            frame.marker = Frame.Marker(center: geometry.center(of: marker), pulse: pulse)
         }
         return frame
     }
 
     /// Fills the caches for the effects now on the board and drops the ones that have gone.
-    private func cachePlans(impacts: [Impact], sinkings: [Sinking], finale: Finale?, allImpacts: [Impact]) {
+    private func cachePlans(
+        impacts: [Impact], sinkings: [Sinking], finale: Finale?, allImpacts: [Impact],
+        burning: [Coordinate], fleet: [ShipPlacement], surfacing: [ShipPlacement]
+    ) {
         var kept: [UUID: [Particle]] = [:]
         for impact in impacts {
             kept[impact.id] = bursts[impact.id] ?? ImpactBurst.particles(kind: EffectsLayer.kind(of: impact), seed: ImpactBurst.seed(for: impact.id))
@@ -269,18 +405,49 @@ struct EffectsLayer: View {
         } else if finalePlan != nil {
             finalePlan = nil
         }
+
+        var smoke: [Coordinate: SmokePlan] = [:]
+        for cell in burning {
+            smoke[cell] = smokePlans[cell] ?? EffectsLayer.smokePlan(for: cell, boardSize: geometry.boardSize, isTargetBoard: board == .target)
+        }
+        if smoke != smokePlans {
+            smokePlans = smoke
+        }
+
+        var wakes: [ShipPlacement: [Particle]] = [:]
+        for ship in fleet {
+            wakes[ship] = wakePlans[ship] ?? Emitters.wake(from: .zero, heading: SailIn.heading(of: ship), seed: EffectsLayer.seed(for: ship))
+        }
+        if wakes != wakePlans {
+            wakePlans = wakes
+        }
+
+        var rings: [ShipPlacement: [Particle]] = [:]
+        for ship in surfacing {
+            rings[ship] = fleetPlans[ship] ?? Emitters.surfaceRings(center: .zero, seed: EffectsLayer.seed(for: ship))
+        }
+        if rings != fleetPlans {
+            fleetPlans = rings
+        }
     }
 
     static func kind(of impact: Impact) -> ImpactBurst.Kind {
-        impact.isHit ? .detonation : .splash
+        if impact.isHit {
+            return .detonation
+        }
+        return impact.isClose ? .closeSplash : .splash
     }
 
     static func seed(for finale: Finale) -> UInt64 {
         finale.start.timeIntervalSinceReferenceDate.bitPattern ^ UInt64(truncatingIfNeeded: finale.coordinate.hashValue)
     }
 
-    /// A sinking's bubbles and blasts. The blasts walk out from the cell the sinking shot struck,
-    /// found among the board's impacts; failing that, from the middle of the hull.
+    static func seed(for ship: ShipPlacement) -> UInt64 {
+        UInt64(truncatingIfNeeded: ship.origin.row &* 31 &+ ship.origin.column &* 7 &+ ship.kind.length &* 131) &* 0x9E37_79B9_7F4A_7C15
+    }
+
+    /// A sinking's bubbles, blasts and reveal rings. The blasts walk out from the cell the sinking
+    /// shot struck, found among the board's impacts; failing that, from the middle of the hull.
     static func plan(for sinking: Sinking, impacts: [Impact]) -> SinkingPlan {
         let ship = sinking.ship
         let cells = ship.cells
@@ -294,11 +461,25 @@ struct EffectsLayer: View {
         let blasts = cells.indices.map { index in
             Emitters.detonation(seed: ImpactBurst.seed(for: sinking.id, step: index + 1), scale: 0.55, isPrimary: false)
         }
-        return SinkingPlan(cells: cells, hitIndex: hitIndex, bubbles: bubbles, blasts: blasts)
+        let reveal = Emitters.surfaceRings(center: .zero, seed: ImpactBurst.seed(for: sinking.id, step: cells.count + 1))
+        return SinkingPlan(cells: cells, hitIndex: hitIndex, bubbles: bubbles, blasts: blasts, reveal: reveal)
+    }
+
+    /// A burning cell's smoke and embers, phased by where it is so neighbours don't puff together.
+    static func smokePlan(for cell: Coordinate, boardSize: Int, isTargetBoard: Bool) -> SmokePlan {
+        let index = cell.row * max(boardSize, 1) + cell.column
+        let phase = Double((cell.row * 7 + cell.column * 3) % 11) / 11 * Emitters.smokePeriod
+        return SmokePlan(
+            puffs: Emitters.smoke(cell: index, phase: phase, isTargetBoard: isTargetBoard),
+            embers: Emitters.emberPops(cell: index, phase: phase + 0.4)
+        )
     }
 
     /// When the last effect on the board will have played out, in wall time, or nil with nothing live.
-    static func liveUntil(shells: [ShellFlight], impacts: [Impact], telegraph: Telegraph?, sinkings: [Sinking], finale: Finale?) -> Date? {
+    static func liveUntil(
+        shells: [ShellFlight], impacts: [Impact], telegraph: Telegraph?, sinkings: [Sinking], finale: Finale?,
+        opening: BattleController.Opening? = nil, markerStart: Date? = nil
+    ) -> Date? {
         var until: Date?
         func extend(_ date: Date) {
             until = until.map { max($0, date) } ?? date
@@ -321,6 +502,12 @@ struct EffectsLayer: View {
         if let finale {
             extend(finale.start.addingTimeInterval(finaleLength + slack))
         }
+        if case let .playing(start)? = opening {
+            extend(start.addingTimeInterval(SailIn.length + slack))
+        }
+        if let markerStart {
+            extend(markerStart.addingTimeInterval(markerPulse))
+        }
         return until
     }
 
@@ -337,6 +524,12 @@ struct EffectsLayer: View {
         for boil in frame.boils {
             drawBoil(boil, frame: frame, in: &context)
         }
+        for smoke in frame.smokes {
+            drawSmoke(smoke, frame: frame, in: &context)
+        }
+        for wake in frame.wakes {
+            ParticleRenderer.draw(wake.particles, elapsed: wake.elapsed, unit: cell, at: wake.center, flashes: frame.flashes, budget: frame.budget, in: &context)
+        }
         for burst in frame.bursts {
             ImpactBurst.draw(
                 kind: burst.kind,
@@ -349,11 +542,14 @@ struct EffectsLayer: View {
                 in: &context
             )
         }
+        if let marker = frame.marker {
+            drawMarker(center: marker.center, cell: cell, pulse: marker.pulse, in: &context)
+        }
         if let incoming = frame.incoming {
             drawIncoming(incoming, frame: frame, in: &context)
         }
-        if let finale = frame.finale {
-            ParticleRenderer.draw(finale.particles, elapsed: finale.elapsed, unit: cell, at: finale.center, flashes: frame.flashes, budget: frame.budget, in: &context)
+        for emission in frame.emissions {
+            ParticleRenderer.draw(emission.particles, elapsed: emission.elapsed, unit: cell, at: emission.center, flashes: frame.flashes, budget: frame.budget, in: &context)
         }
     }
 
@@ -395,6 +591,36 @@ struct EffectsLayer: View {
                 in: &context
             )
         }
+    }
+
+    /// A burning cell's smoke (never over 0.35 opacity) and the embers popping off its fire; on the
+    /// target board the smoke stays inside the cell's own rect.
+    nonisolated private static func drawSmoke(_ smoke: Frame.Smoke, frame: Frame, in context: inout GraphicsContext) {
+        var layer = context
+        if let clip = smoke.clip {
+            layer.clip(to: Path(clip))
+        }
+        var puffs = layer
+        puffs.opacity = 0.8
+        ParticleRenderer.draw(smoke.puffs, elapsed: smoke.elapsed, unit: frame.cell, at: smoke.center, flashes: frame.flashes, budget: frame.budget, in: &puffs)
+        ParticleRenderer.draw(smoke.embers, elapsed: smoke.elapsed, unit: frame.cell, at: smoke.center, flashes: frame.flashes, budget: frame.budget, in: &layer)
+    }
+
+    /// The marker on the latest shot: a cyan ring on the cell and, while it pulses, a ring expanding
+    /// out of it.
+    nonisolated static func drawMarker(center: CGPoint, cell: CGFloat, pulse: Double?, in context: inout GraphicsContext) {
+        context.stroke(
+            ParticleRenderer.circle(center, cell * 0.46),
+            with: .color(Theme.reticle.opacity(0.55)),
+            lineWidth: max(1, cell * 0.04)
+        )
+        guard let pulse else { return }
+        let grow = Particle.easeOut(pulse)
+        context.stroke(
+            ParticleRenderer.circle(center, cell * (0.3 + 0.6 * CGFloat(grow))),
+            with: .color(Theme.reticle.opacity(0.7 * (1 - pulse))),
+            lineWidth: max(1, cell * 0.05 * CGFloat(1 - pulse) + 0.5)
+        )
     }
 
     /// The enemy's shell on its way: a shadow blot drifting from the top left of the water onto the
@@ -448,5 +674,54 @@ struct EffectsLayer: View {
                 style: StrokeStyle(lineWidth: 3, lineCap: .round)
             )
         }
+    }
+}
+
+/// The fleet sailing into its berths at the start of a battle (OPN-2): each ship slides in along its
+/// axis from beyond the edge its stern faces, bow first, carrier first, `stagger` apart, over
+/// `shipLength` seconds, with a wake behind it on the full-size board. Shared by `HomeBoard` (the
+/// ships' offsets) and `EffectsLayer` (the wakes), so both read the same clock.
+enum SailIn {
+    /// Between ships setting off: 90 ms.
+    static let stagger: TimeInterval = Timing.Stagger.ship * 2
+    /// One ship's trip into its berth.
+    static let shipLength: TimeInterval = 0.7
+    /// How long a wake is drawn after a ship sets off.
+    static let wakeLength: TimeInterval = 1.8
+    /// From the first ship setting off until the last of a full fleet has berthed.
+    static var length: TimeInterval { Double(Timing.Stagger.maxItems) * stagger + shipLength }
+
+    /// When the `index`th ship sets off, after the first.
+    static func start(of index: Int) -> TimeInterval {
+        Double(min(max(0, index), Timing.Stagger.maxItems)) * stagger
+    }
+
+    /// How far into its berth the `index`th ship is at `time`, eased, for a sail-in that began at
+    /// `since` on the same clock: 0 still beyond the edge, 1 berthed.
+    static func progress(index: Int, since: TimeInterval, at time: TimeInterval) -> Double {
+        Motion.easeOut(min(1, max(0, (time - since - start(of: index)) / shipLength)))
+    }
+
+    /// The way a ship travels: a horizontal ship comes in from the left, a vertical one from the top.
+    static func heading(of ship: ShipPlacement) -> SIMD2<Double> {
+        ship.orientation == .horizontal ? SIMD2(1, 0) : SIMD2(0, 1)
+    }
+
+    /// Where a ship is relative to its berth at `progress`: beyond the water's edge at 0, home at 1.
+    static func offset(of ship: ShipPlacement, geometry: BoardGeometry, progress: Double) -> CGSize {
+        let rect = geometry.rect(for: ship)
+        let grid = geometry.gridRect
+        let remaining = CGFloat(1 - min(1, max(0, progress)))
+        return ship.orientation == .horizontal
+            ? CGSize(width: -(rect.maxX - grid.minX + geometry.cell * 0.5) * remaining, height: 0)
+            : CGSize(width: 0, height: -(rect.maxY - grid.minY + geometry.cell * 0.5) * remaining)
+    }
+
+    /// The point the wake trails from: the stern end of the ship in its berth.
+    static func stern(of ship: ShipPlacement, geometry: BoardGeometry) -> CGPoint {
+        let rect = geometry.rect(for: ship)
+        return ship.orientation == .horizontal
+            ? CGPoint(x: rect.minX + geometry.cell * 0.15, y: rect.midY)
+            : CGPoint(x: rect.midX, y: rect.minY + geometry.cell * 0.15)
     }
 }

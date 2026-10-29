@@ -11,6 +11,9 @@ struct CellMarkView: View {
     var isMiniature = false
     /// The board's ``FlameClock`` time, which makes fires flicker.
     var time: Double?
+    /// When every fire on the board flares (the finale's stamp beat, FIN-1), on the same clock as
+    /// `time`; nil otherwise.
+    var flareStart: Double?
 
     var body: some View {
         symbol(for: mark)
@@ -21,18 +24,22 @@ struct CellMarkView: View {
     @ViewBuilder
     private func symbol(for mark: CellMark) -> some View {
         if isMiniature {
-            Circle()
-                .fill(miniatureColor)
-                .frame(width: cell * 0.5, height: cell * 0.5)
-                .shadow(color: mark == .miss ? .clear : Theme.hit, radius: cell * 0.2)
+            if mark == .miss {
+                Circle()
+                    .fill(miniatureColor)
+                    .frame(width: cell * 0.5, height: cell * 0.5)
+            } else {
+                // A crater: a dark dot with an ember ring (BAT-5), which doesn't flicker.
+                CraterDot(cell: cell, isSunk: mark == .sunk)
+            }
         } else {
             switch mark {
             case .miss:
                 SplashMark(cell: cell)
             case .hit:
-                FlameMark(cell: cell, showsHalo: showsHitGlow, time: time)
+                FlameMark(cell: cell, showsHalo: showsHitGlow, time: time, flare: FlameMark.flare(at: time, since: flareStart))
             case .sunk:
-                FlameMark(cell: cell, scale: 0.7, showsHalo: false, time: time)
+                FlameMark(cell: cell, scale: 0.7, showsHalo: false, time: time, flare: FlameMark.flare(at: time, since: flareStart))
                     .opacity(0.8)
             }
         }
@@ -64,43 +71,72 @@ private struct SplashMark: View {
     }
 }
 
+/// A hit on the miniature: a blackened dot with an ember rim, red once the ship is down.
+private struct CraterDot: View {
+    let cell: CGFloat
+    let isSunk: Bool
+
+    var body: some View {
+        let rim = isSunk ? Theme.hit : Theme.flame
+        Circle()
+            .fill(Color.black.opacity(0.75))
+            .frame(width: cell * 0.5, height: cell * 0.5)
+            .overlay(Circle().strokeBorder(rim.opacity(0.95), lineWidth: max(1, cell * 0.08)))
+            .shadow(color: rim.opacity(0.8), radius: cell * 0.2)
+    }
+}
+
 /// One clock for all the fires on a board, so a board full of hits redraws once a frame rather than
-/// once per flame. It stops when nothing is burning, under Reduce Motion and in Low Power Mode, and
-/// passes `nil` then.
+/// once per flame. It is `LoopClock(loop: .effects)`: 24 frames a second, held still (passing `nil`)
+/// when nothing is burning and whenever the policy holds loops still.
 struct FlameClock<Content: View>: View {
     let isBurning: Bool
     @ViewBuilder let content: (Double?) -> Content
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let isStill = !isBurning || Motion.holdsStill(reduceMotion: reduceMotion)
-        TimelineView(.animation(minimumInterval: 1 / 24, paused: isStill)) { timeline in
+        LoopClock(loop: .effects, isLive: isBurning) { seconds in
             // Shares the board's coordinates: marks inside are placed with `position`.
             ZStack(alignment: .topLeading) {
-                content(isStill ? nil : Motion.seconds(timeline.date))
+                content(seconds)
             }
         }
     }
 }
 
 /// A fire burning where a shell struck a ship. It flickers with `time` from the board's
-/// ``FlameClock``, and holds still without it.
+/// ``FlameClock``, and holds still without it. `flare` (0…1) is the finale's flare: the halo grows
+/// to 1.4× and the flame brightens, with flashes only.
 struct FlameMark: View {
     let cell: CGFloat
     var scale: CGFloat = 1
     var showsHalo = true
     var time: Double?
+    var flare: Double = 0
     /// Each fire flickers at its own pace.
     @State private var rhythm = FlameMark.makeRhythm()
+    @Environment(\.motionPolicy) private var policy
+
+    /// How long the finale's flare lasts, in seconds.
+    static let flareLength: TimeInterval = 0.5
 
     nonisolated private static func makeRhythm() -> (phase: Double, speed: Double) {
         (.random(in: 0...(2 * .pi)), .random(in: 2.4...3.6))
     }
 
+    /// The flare 0…1 at `time` for a flare that began at `start`: up at once, fading out over
+    /// `flareLength`; 0 without a start, before it, or once it is over.
+    static func flare(at time: Double?, since start: Double?) -> Double {
+        guard let time, let start else { return 0 }
+        let elapsed = time - start
+        guard elapsed >= 0, elapsed < flareLength else { return 0 }
+        return 1 - elapsed / flareLength
+    }
+
     var body: some View {
         let flicker: Double = time.map { 0.5 + 0.5 * sin($0 * rhythm.speed * 2 * .pi + rhythm.phase) } ?? 0.5
+        let flare = policy.allowsFlashes ? min(1, max(0, self.flare)) : 0
         ZStack {
-            if showsHalo {
+            if showsHalo || flare > 0 {
                 Circle()
                     .fill(
                         RadialGradient(
@@ -111,13 +147,28 @@ struct FlameMark: View {
                         )
                     )
                     .frame(width: cell, height: cell)
-                    .scaleEffect(0.92 + 0.16 * flicker)
+                    .scaleEffect((0.92 + 0.16 * flicker) * (1 + 0.4 * flare) * (showsHalo ? 1 : 0.7))
+                    .opacity(showsHalo ? 1 : flare)
+            }
+            // Embers drifting up off the fire (BAT-5): three dots that rise and fade with the flicker.
+            if let time, policy.allowsParticles {
+                ForEach(0..<3, id: \.self) { index in
+                    let phase = Motion.cycle(time + Double(index) * 0.37 + rhythm.phase, period: 1.1)
+                    Circle()
+                        .fill(index == 1 ? Theme.ember : Theme.flame)
+                        .frame(width: max(1, cell * 0.06 * scale), height: max(1, cell * 0.06 * scale))
+                        .offset(
+                            x: cell * scale * (0.12 * sin(phase * 2 * .pi + Double(index)) + (Double(index) - 1) * 0.1),
+                            y: -cell * scale * (0.1 + 0.42 * phase)
+                        )
+                        .opacity((1 - phase) * 0.9)
+                }
             }
             Image(systemName: "flame.fill")
                 .font(.system(size: cell * 0.52 * scale))
                 .foregroundStyle(LinearGradient(colors: [Theme.ember, Theme.flame, Theme.hit], startPoint: .top, endPoint: .bottom))
                 .scaleEffect(x: 1.04 - 0.1 * flicker, y: 0.94 + 0.14 * flicker, anchor: .bottom)
-                .shadow(color: Theme.flame.opacity(0.9), radius: cell * 0.12 * scale)
+                .shadow(color: Theme.flame.opacity(0.9), radius: cell * (0.12 + 0.1 * flare) * scale)
         }
         .allowsHitTesting(false)
     }

@@ -142,6 +142,9 @@ struct ToastView: View {
 
     let toast: Toast
     var style: Style = .app
+    /// Posts the message to VoiceOver as it lands. The battle banner passes `false` because the
+    /// controller already announces its news with the right priority.
+    var isSpoken = true
 
     @Environment(\.motionPolicy) private var policy
     @State private var drag: CGFloat = 0
@@ -178,7 +181,9 @@ struct ToastView: View {
         .accessibilityAction(.escape) { ToastCenter.shared.dismiss() }
         .accessibilityAction(named: "Dismiss") { ToastCenter.shared.dismiss() }
         .task(id: toast.id) {
-            AccessibilityNotification.Announcement(toast.message).post()
+            if isSpoken {
+                AccessibilityNotification.Announcement(toast.message).post()
+            }
             try? await Task.sleep(for: .milliseconds(100))
             if policy.tier == .full, !Task.isCancelled {
                 bounces += 1

@@ -312,6 +312,38 @@ enum Emitters {
         return looped
     }
 
+    /// Embers popping off a burning cell: 4 embers a loop of `smokePeriod` seconds, each rising for
+    /// under a second, returned twice like `smoke(cell:phase:isTargetBoard:)` so that drawing them at
+    /// `smokePeriod + time mod smokePeriod` is seamless. `phase` offsets the loop per cell.
+    static func emberPops(cell: Int, phase: Double) -> [Particle] {
+        var generator = SplitMix64(seed: 0xE3B5 &+ UInt64(truncatingIfNeeded: cell) &* 0x9E37_79B9_7F4A_7C15)
+        let period = smokePeriod
+        var base: [Particle] = []
+        base.reserveCapacity(4)
+        for index in 0..<4 {
+            let offset = (Double(index) / 4 * period + phase + Double.random(in: 0...0.2, using: &generator)).truncatingRemainder(dividingBy: period)
+            base.append(Particle(
+                origin: SIMD2(Double.random(in: -0.15...0.15, using: &generator), Double.random(in: -0.1...0.05, using: &generator)),
+                velocity: SIMD2(Double.random(in: -0.35...0.35, using: &generator), -Double.random(in: 0.5...0.9, using: &generator)),
+                gravity: 0,
+                drag: 1.2,
+                delay: offset < 0 ? offset + period : offset,
+                life: Double.random(in: 0.45...0.7, using: &generator),
+                size: Double.random(in: 0.03...0.05, using: &generator),
+                spin: 0,
+                tint: Double.random(in: 0...1, using: &generator),
+                kind: .ember
+            ))
+        }
+        var looped = base
+        for ember in base {
+            var again = ember
+            again.delay += period
+            looped.append(again)
+        }
+        return looped
+    }
+
     /// Water boiling around a sinking hull: 18 bubbles rising from the rect (x, y, width, height,
     /// relative to the renderer's point) over the sinking, and 3 dark slick rings spreading from its
     /// centre.

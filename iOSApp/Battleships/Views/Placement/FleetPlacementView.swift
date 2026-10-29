@@ -13,6 +13,8 @@ struct FleetPlacementView: View {
     private let onDeploy: @MainActor ([ShipPlacement], DeployHandoff) async throws -> Void
     /// Turns ships and confirms the fleet from outside the gestures (the filmstrips).
     private let director: PlacementDirector?
+    /// Off under a sheet's glass, where the screen behind does the moving; see `stillBackdrop()`.
+    private var isBackdropAnimated = true
 
     @Environment(AppModel.self) private var app
     @Environment(\.motionPolicy) private var policy
@@ -59,10 +61,18 @@ struct FleetPlacementView: View {
         _model = State(initialValue: FleetPlacementModel(rules: mode.rules))
     }
 
+    /// The same screen with its ocean held still: for the accept sheet, whose glass sits over a battle
+    /// that is already stilled beneath it, so one living backdrop at a time.
+    func stillBackdrop() -> Self {
+        var copy = self
+        copy.isBackdropAnimated = false
+        return copy
+    }
+
     var body: some View {
         let isDeploying = deploy != .idle
         ZStack {
-            OceanBackdrop()
+            OceanBackdrop(isAnimated: isBackdropAnimated)
             ScrollView {
                 VStack(spacing: 20) {
                     if let opponentDisplayName {

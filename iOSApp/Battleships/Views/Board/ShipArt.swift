@@ -1,18 +1,58 @@
 import BattleshipCore
 import SwiftUI
 
+/// What has happened to a ship, for its art: the cells along it that have been hit (0 is the origin
+/// cell), and whether it has gone down (the static wreck).
+struct ShipDamage: Equatable, Sendable {
+    var hitCells: Set<Int> = []
+    var isSunk = false
+
+    static let none = ShipDamage()
+
+    /// The damage of `ship` from a board's marks: `mark(cell)` for each of its cells, in order.
+    static func of(_ ship: ShipPlacement, isSunk: Bool, mark: (Coordinate) -> CellMark?) -> ShipDamage {
+        var hits = Set<Int>()
+        for (index, cell) in ship.cells.enumerated() {
+            switch mark(cell) {
+            case .hit, .sunk: hits.insert(index)
+            case .miss, nil: break
+            }
+        }
+        return ShipDamage(hitCells: hits, isSunk: isSunk)
+    }
+}
+
 /// A ship seen from above, drawn to fill its frame: hull, deck, guns and superstructure in the
-/// style of its class. Sunk ships are drawn as charred wrecks.
+/// style of its class, with craters where it has been hit. Sunk ships are drawn as charred wrecks.
+/// `surfacing` (0…1) is the hull rising into view from the stern (the target board's reveal, the
+/// finale's fleet); `sinkProgress` (0…1) is the hull going under stern first while it darkens, and
+/// `wreckFade` (0…1) the wreck art coming in beneath it; `darkening` (0…1) dims a wreck further (the
+/// finale's fleet fate). The listing and the bob are transforms the board applies outside.
 struct ShipView: View {
     let ship: ShipPlacement
     var isSunk = false
     var isHighlighted = false
+    var damage: ShipDamage? = nil
+    var surfacing: Double = 1
+    var sinkProgress: Double = 0
+    var wreckFade: Double = 0
+    var darkening: Double = 0
 
     var body: some View {
         let kind = ship.kind
         let isVertical = ship.orientation == .vertical
+        let state: ShipDamage = {
+            var state = damage ?? ShipDamage.none
+            state.isSunk = state.isSunk || isSunk
+            return state
+        }()
+        let surfacing = min(1, max(0, self.surfacing))
+        let sink = min(1, max(0, sinkProgress))
+        let wreck = min(1, max(0, wreckFade))
+        let darkening = min(1, max(0, self.darkening))
+        let isWreck = state.isSunk && sink <= 0 && wreck <= 0
         Canvas { context, size in
-            ShipArt.draw(kind, isSunk: isSunk, isVertical: isVertical, in: context, size: size)
+            ShipArt.draw(kind, damage: state, isVertical: isVertical, surfacing: surfacing, sink: sink, wreck: wreck, darkening: darkening, in: context, size: size)
         }
         .overlay {
             if isHighlighted {
@@ -21,7 +61,7 @@ struct ShipView: View {
                     .glow(Theme.reticle, radius: 6)
             }
         }
-        .shadow(color: isSunk ? Theme.hit.opacity(0.4) : .black.opacity(0.5), radius: isSunk ? 5 : 3, y: isSunk ? 0 : 2)
+        .shadow(color: isWreck ? Theme.hit.opacity(0.4) : .black.opacity(0.5 * surfacing), radius: isWreck ? 5 : 3, y: isWreck ? 0 : 2)
     }
 }
 
@@ -84,8 +124,9 @@ struct WarshipProfile: Shape {
     }
 }
 
-/// Draws ships for ``ShipView``. Everything is drawn lying horizontally, bow to the right, then
-/// turned upright for vertical ships. Shading runs across the beam, so it reads the same either way.
+/// Draws ships for ``ShipView``. Everything is drawn lying horizontally, stern at the left and bow to
+/// the right, then turned upright for vertical ships (stern at the top). Shading runs across the
+/// beam, so it reads the same either way.
 enum ShipArt {
     /// How much of the available beam each class uses: carriers are broad, patrol boats slight.
     static func beamFraction(_ kind: ShipKind) -> CGFloat {
@@ -97,6 +138,12 @@ enum ShipArt {
         case .destroyer: 0.72
         case .patrolBoat: 0.62
         }
+    }
+
+    /// Where a ship pivots when it lists: its stern, the left end of the horizontal art or the top of
+    /// the vertical art.
+    static func sternAnchor(isVertical: Bool) -> UnitPoint {
+        isVertical ? UnitPoint(x: 0.5, y: 0) : UnitPoint(x: 0, y: 0.5)
     }
 
     /// The hull outline in a `length` × `beam` box, centred across the beam.
@@ -155,8 +202,28 @@ enum ShipArt {
         )
     }
 
+    /// The ship afloat or as a wreck, as before the damage and sinking were drawn.
     @MainActor
     static func draw(_ kind: ShipKind, isSunk: Bool, isVertical: Bool, in context: GraphicsContext, size: CGSize) {
+        draw(kind, damage: ShipDamage(isSunk: isSunk), isVertical: isVertical, surfacing: 1, sink: 0, wreck: 0, darkening: 0, in: context, size: size)
+    }
+
+    /// The whole picture of a ship: the wreck (a sunk ship, or the wreck fading in by `wreck` during a
+    /// sinking), the live hull above it (clipped by the waterline advancing from the stern by `sink`
+    /// and darkening as it goes; veiled in sea colour beyond `surfacing` of its length with a cyan
+    /// outline fading as it fills in), craters on the cells in `damage.hitCells`, and `darkening`.
+    @MainActor
+    static func draw(
+        _ kind: ShipKind,
+        damage: ShipDamage,
+        isVertical: Bool,
+        surfacing: Double,
+        sink: Double,
+        wreck: Double,
+        darkening: Double,
+        in context: GraphicsContext,
+        size: CGSize
+    ) {
         var base = context
         if isVertical {
             base.translateBy(x: size.width, y: 0)
@@ -169,9 +236,54 @@ enum ShipArt {
         let beam = frameBeam * beamFraction(kind)
         let box = CGRect(x: 0, y: (frameBeam - beam) / 2, width: length, height: beam)
         let hullPath = hull(kind, length: length, beam: frameBeam)
+        let isStaticWreck = damage.isSunk && sink <= 0 && wreck <= 0
 
-        var art = base
-        if isSunk {
+        // The wreck, beneath: whole for a sunk ship, fading in under a sinking one.
+        let wreckOpacity = isStaticWreck ? 1 : wreck
+        if wreckOpacity > 0 {
+            var layer = base
+            layer.opacity = wreckOpacity
+            if darkening > 0 {
+                layer.addFilter(.brightness(-0.3 * darkening))
+                layer.addFilter(.saturation(1 - 0.5 * darkening))
+            }
+            drawHull(kind, isWreck: true, damage: damage, hullPath: hullPath, box: box, in: layer)
+            drawWreckage(hullPath, box: box, in: layer)
+        }
+
+        // The live hull: afloat, surfacing, or going under stern first.
+        guard !isStaticWreck, sink < 1 else { return }
+        var live = base
+        if sink > 0 {
+            live.clip(to: aboveWater(sink: sink, length: length, beam: frameBeam))
+            live.addFilter(.brightness(-0.35 * sink))
+            live.addFilter(.saturation(1 - 0.4 * sink))
+        }
+        if darkening > 0 {
+            live.addFilter(.brightness(-0.3 * darkening))
+            live.addFilter(.saturation(1 - 0.5 * darkening))
+        }
+        drawHull(kind, isWreck: false, damage: damage, hullPath: hullPath, box: box, in: live)
+
+        if surfacing < 1 {
+            // The sea still covers the hull beyond `surfacing` of its length from the stern, and the
+            // cyan outline of a contact shows where it will be.
+            var veil = live
+            veil.clip(to: hullPath)
+            veil.fill(underWater(surfacing: surfacing, length: length, beam: frameBeam), with: .color(Theme.seaTop.opacity(0.92)))
+            live.stroke(hullPath, with: .color(Theme.reticle.opacity(0.9 * (1 - surfacing))), lineWidth: max(1, beam * 0.06))
+        }
+    }
+
+    // MARK: The hull
+
+    /// Hull, deck, the class's fittings, the outline and the craters, into `context`.
+    @MainActor
+    private static func drawHull(_ kind: ShipKind, isWreck: Bool, damage: ShipDamage, hullPath: Path, box: CGRect, in context: GraphicsContext) {
+        let length = box.width
+        let beam = box.height
+        var art = context
+        if isWreck {
             art.addFilter(.grayscale(0.85))
             art.addFilter(.colorMultiply(Color(red: 0.86, green: 0.52, blue: 0.44)))
             art.addFilter(.brightness(-0.06))
@@ -202,8 +314,95 @@ enum ShipArt {
         }
         art.stroke(hullPath, with: .color(.black.opacity(0.4)), lineWidth: max(0.5, beam * 0.03))
 
-        if isSunk {
-            drawWreckage(hullPath, box: box, in: base)
+        if !damage.hitCells.isEmpty {
+            drawCraters(damage.hitCells, kind: kind, hullPath: hullPath, box: box, in: context)
+        }
+    }
+
+    /// The region of the hull still above the water: everything from the waterline to the bow, the
+    /// waterline a sine advancing from the stern (x = 0) to the bow (x = length) as `sink` runs 0…1.
+    private static func aboveWater(sink: Double, length: CGFloat, beam: CGFloat) -> Path {
+        let amplitude = max(1, beam * 0.12)
+        let front = CGFloat(sink) * (length + amplitude * 2) - amplitude
+        var path = Path()
+        let top = -beam
+        let bottom = beam * 2
+        path.move(to: CGPoint(x: length + beam, y: top))
+        path.addLine(to: CGPoint(x: length + beam, y: bottom))
+        var y = bottom
+        while y >= top {
+            let wobble = amplitude * sin(y / max(beam, 1) * .pi * 2 + CGFloat(sink) * 5)
+            path.addLine(to: CGPoint(x: front + wobble, y: y))
+            y -= max(1, beam / 6)
+        }
+        path.closeSubpath()
+        return path
+    }
+
+    /// The region of the hull the sea still covers while it surfaces: from `surfacing` of the length
+    /// (plus a wobble) to the bow.
+    private static func underWater(surfacing: Double, length: CGFloat, beam: CGFloat) -> Path {
+        let amplitude = max(1, beam * 0.1)
+        let front = CGFloat(surfacing) * (length + amplitude * 2) - amplitude
+        var path = Path()
+        let top = -beam
+        let bottom = beam * 2
+        path.move(to: CGPoint(x: length + beam, y: top))
+        path.addLine(to: CGPoint(x: length + beam, y: bottom))
+        var y = bottom
+        while y >= top {
+            let wobble = amplitude * sin(y / max(beam, 1) * .pi * 1.5 + CGFloat(surfacing) * 4)
+            path.addLine(to: CGPoint(x: front + wobble, y: y))
+            y -= max(1, beam / 6)
+        }
+        path.closeSubpath()
+        return path
+    }
+
+    /// A blackened crater with an ember rim and three scorch streaks on each hit cell (BAT-5), the
+    /// same every time for a cell, clipped to the hull.
+    @MainActor
+    private static func drawCraters(_ cells: Set<Int>, kind: ShipKind, hullPath: Path, box: CGRect, in context: GraphicsContext) {
+        let cellLength = box.width / CGFloat(max(kind.length, 1))
+        let beam = box.height
+        var scorch = context
+        scorch.clip(to: hullPath)
+        for index in cells.sorted() {
+            var generator = SplitMix64(seed: 0xC8A7 &+ UInt64(truncatingIfNeeded: index) &* 0x9E37_79B9_7F4A_7C15)
+            let center = CGPoint(
+                x: box.minX + (CGFloat(index) + 0.5) * cellLength + CGFloat.random(in: -0.12...0.12, using: &generator) * cellLength,
+                y: box.midY + CGFloat.random(in: -0.18...0.18, using: &generator) * beam
+            )
+            let radius = min(beam * 0.3, cellLength * 0.28)
+            // Scorch streaks first, radiating from the crater.
+            var streaks = Path()
+            for _ in 0..<3 {
+                let angle = CGFloat.random(in: 0...(2 * .pi), using: &generator)
+                let reach = radius * CGFloat.random(in: 1.6...2.6, using: &generator)
+                streaks.move(to: CGPoint(x: center.x + cos(angle) * radius * 0.6, y: center.y + sin(angle) * radius * 0.6))
+                streaks.addLine(to: CGPoint(x: center.x + cos(angle) * reach, y: center.y + sin(angle) * reach))
+            }
+            scorch.stroke(streaks, with: .color(.black.opacity(0.55)), style: StrokeStyle(lineWidth: max(0.8, radius * 0.3), lineCap: .round))
+            scorch.fill(
+                Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)),
+                with: .radialGradient(
+                    Gradient(colors: [.black.opacity(0.9), .black.opacity(0.75), .black.opacity(0)]),
+                    center: center,
+                    startRadius: 0,
+                    endRadius: radius
+                )
+            )
+            let rim = radius * 0.72
+            scorch.stroke(
+                Path(ellipseIn: CGRect(x: center.x - rim, y: center.y - rim, width: rim * 2, height: rim * 2)),
+                with: .radialGradient(
+                    Gradient(colors: [Theme.ember, Theme.flame, Theme.hit.opacity(0.8)]),
+                    center: center,
+                    startRadius: 0,
+                    endRadius: rim
+                ),
+                lineWidth: max(0.6, radius * 0.18)
+            )
         }
     }
 

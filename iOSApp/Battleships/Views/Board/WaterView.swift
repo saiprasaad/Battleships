@@ -8,10 +8,11 @@ import SwiftUI
 /// Impacts and stains are placed in the board's coordinate space (what `BoardGeometry.center(of:)`
 /// gives) and timed on the clock `Motion.seconds(_:)` reads, `Date.timeIntervalSinceReferenceDate`;
 /// `ShaderEffects` folds that clock into a 1000 s cycle before it reaches the GPU. The ripple pass runs
-/// only while an impact is live and the stain pass only while there are stains. Under Reduce Motion
-/// nothing moves and impacts are ignored; in Low Power Mode the water holds still but a ripple still
-/// plays once; with `isAnimated` off there is one still frame.
-struct WaterView: View {
+/// only while an impact is live and the stain pass only while there are stains. The policy sets the
+/// pace: `waterInterval` (24 frames a second, 12 in the reduced tier) or, when it holds loops still,
+/// one still frame at `stillSeconds` with no ripples; with `isAnimated` off there is one still frame.
+/// `seaState` is animatable: callers change it under `.animation(Motion.Curve.state, value:)`.
+struct WaterView: View, Animatable {
     let geometry: BoardGeometry
     /// How rough the water is, from 0 (calm) to 1. Animate changes from the caller with `.animation(_:value:)`.
     var seaState: Double = 0.2
@@ -21,24 +22,26 @@ struct WaterView: View {
     var stains: [WaterStain] = []
     /// Off for one still frame: miniatures, Reduce Motion.
     var isAnimated = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Set while a ripple plays, so the clock ticks for it and pauses again after it.
-    @State private var hasLiveImpact = false
+    @Environment(\.motionPolicy) private var policy
 
     /// The swell's phase in a still frame.
     private static let stillSeconds: TimeInterval = 12.5
 
+    var animatableData: Double {
+        get { seaState }
+        set { seaState = newValue }
+    }
+
     var body: some View {
-        // TODO(F1): read `@Environment(\.motionPolicy)` here (`loopsHoldStill`, `ambientFrameInterval`) instead of `Motion.holdsStill` and the 1/24 s cap.
-        let holdsStill = !isAnimated || Motion.holdsStill(reduceMotion: reduceMotion)
-        let allowsRipples = isAnimated && !reduceMotion
-        let isStill = holdsStill && !(allowsRipples && hasLiveImpact)
+        let interval = policy.waterInterval
+        let holdsStill = !isAnimated || interval == nil || policy.holdsStill
+        let allowsRipples = isAnimated && policy.tier != .still
         let rect = geometry.gridRect
         let cell = geometry.cell
         let cornerRadius = min(14, cell * 0.35)
-        TimelineView(.animation(minimumInterval: 1 / 24, paused: isStill)) { timeline in
+        TimelineView(.animation(minimumInterval: interval ?? Clocks.flameFrameInterval, paused: holdsStill)) { timeline in
             let now = Motion.seconds(timeline.date)
-            let ripples = allowsRipples ? WaterView.liveImpacts(impacts, at: now, origin: rect.origin) : []
+            let ripples = allowsRipples && !holdsStill ? WaterView.liveImpacts(impacts, at: now, origin: rect.origin) : []
             let marks = WaterView.chosenStains(stains, at: now, settled: holdsStill, origin: rect.origin)
             Color.clear
                 .overlay(alignment: .topLeading) {
@@ -60,29 +63,9 @@ struct WaterView: View {
                         .offset(x: rect.minX, y: rect.minY)
                 }
         }
-        .task(id: newestImpactStart) {
-            // Wakes the clock for a ring (it holds still otherwise in Low Power Mode) and lets it sleep
-            // again once the ring has died.
-            guard isAnimated, !reduceMotion, let newest = newestImpactStart else {
-                hasLiveImpact = false
-                return
-            }
-            let remaining = newest + WaterImpact.life - Date().timeIntervalSinceReferenceDate
-            guard remaining > 0 else {
-                hasLiveImpact = false
-                return
-            }
-            hasLiveImpact = true
-            try? await Task.sleep(for: .seconds(remaining + 0.1))
-            guard !Task.isCancelled else { return }
-            hasLiveImpact = false
-        }
+        .motionBudgeted(isLive: !holdsStill)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-    }
-
-    private var newestImpactStart: TimeInterval? {
-        impacts.map(\.start).max()
     }
 
     /// The impacts whose rings are playing at `now`, newest first and four at most, moved from the
