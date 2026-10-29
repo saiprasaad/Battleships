@@ -224,23 +224,44 @@ final class AppModel {
     /// Starts setting up a game with the same opponent and rules.
     func requestRematch(of route: GameRoute) {
         var draft = NewGameDraft()
+        draft.isRematch = true
         switch route {
         case let .solo(id):
             guard let match = solo.match(id) else { return }
             draft.opponent = .computer
             draft.difficulty = match.difficulty
             draft.mode = match.mode
+            draft.opponentDisplayName = "Computer · \(match.difficulty.displayName)"
         case let .online(id):
             guard let game = online.summary(for: id) else { return }
             draft.mode = game.mode
             if let opponent = game.opponent {
                 draft.opponent = .friend
                 draft.friendUsername = opponent.username
+                draft.opponentDisplayName = opponent.username
             } else {
                 draft.opponent = .randomPlayer
             }
         }
         newGameRequest = draft
+    }
+
+    /// Starts the game a draft describes with the player's fleet, and says where to go: the one
+    /// place the New Battle sheet and the rematch flow share.
+    func startGame(_ draft: NewGameDraft, fleet: [ShipPlacement]) async throws -> GameRoute {
+        switch draft.opponent {
+        case .computer:
+            let match = try solo.start(mode: draft.mode, difficulty: draft.difficulty, fleet: fleet)
+            return .solo(match.id)
+        case .randomPlayer:
+            let game = try await online.create(CreateGameRequest(mode: draft.mode, fleet: fleet))
+            return .online(game.id)
+        case .friend:
+            let game = try await online.create(
+                CreateGameRequest(mode: draft.mode, fleet: fleet, opponent: draft.trimmedFriendUsername)
+            )
+            return .online(game.id)
+        }
     }
 
     private func registerDeviceIfPossible() async {

@@ -267,11 +267,27 @@ struct BattleControllerTests {
         #expect(controller.phase == .unavailable("This game no longer exists."))
     }
 
-    @Test func rematchPrefillsTheNewGameSheet() throws {
+    @Test func rematchGoesStraightToDeploy() throws {
         let (app, _) = makeTestApp()
         let match = try app.solo.start(mode: .quick, difficulty: .hard, fleet: Rules.quick.randomFleet())
         app.requestRematch(of: .solo(match.id))
-        #expect(app.newGameRequest == NewGameDraft(opponent: .computer, difficulty: .hard, mode: .quick))
+        let draft = try #require(app.newGameRequest)
+        #expect(draft.isRematch)
+        #expect(draft.opponent == .computer)
+        #expect(draft.difficulty == .hard)
+        #expect(draft.mode == .quick)
+        #expect(draft.opponentDisplayName == "Computer · Admiral")
+    }
+
+    @Test func startingAGameFromADraftOpensIt() async throws {
+        let (app, _) = makeTestApp()
+        let draft = NewGameDraft(opponent: .computer, difficulty: .easy, mode: .quick)
+        let route = try await app.startGame(draft, fleet: Rules.quick.randomFleet())
+        guard case let .solo(id) = route else {
+            Issue.record("a game against the computer is a solo route")
+            return
+        }
+        #expect(app.solo.match(id)?.difficulty == .easy)
     }
 
     // MARK: The shot loop
