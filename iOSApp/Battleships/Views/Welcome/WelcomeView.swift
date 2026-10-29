@@ -146,7 +146,7 @@ struct WelcomeView: View {
                 .offset(y: 24 * (1 - setSail))
                 .opacity(setSail)
 
-                HorizonScene(shipPosition: 0.3, shipWidth: 120, shipEntrance: ship)
+                HorizonScene(shipPosition: 0.3, shipWidth: 120, shipEntrance: ship, isLively: true)
                     .frame(height: 84)
                     .padding(.top, 4)
             }

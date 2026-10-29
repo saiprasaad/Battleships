@@ -3,7 +3,9 @@ import BattleshipCore
 import SwiftUI
 
 /// Choose an opponent and rules, then deploy a fleet. Presented as glass over the lobby's own sea,
-/// with a still sea of its own inside; its first sections enter one after another.
+/// with a still sea of its own inside; its first sections enter one after another. One selection
+/// frame slides between the opponent cards, Difficulty is a three-position dial, friend suggestions
+/// settle one after another and Next pulses once when the draft completes (LOB-6).
 struct NewGameSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
@@ -25,24 +27,10 @@ struct NewGameSheet: View {
             Form {
                 Section {
                     // At accessibility sizes the cards stack, so their titles have room.
-                    let isStacked = dynamicTypeSize.isAccessibilitySize
-                    let cards = isStacked ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
-                    cards {
-                        ForEach(OpponentChoice.allCases) { choice in
-                            Button {
-                                withAnimation(Motion.Curve.snap.policy(policy)) { draft.opponent = choice }
-                            } label: {
-                                OpponentCard(choice: choice, isSelected: draft.opponent == choice, isStacked: isStacked)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(choice.title)
-                            .accessibilityHint(choice.subtitle)
-                            .accessibilityAddTraits(draft.opponent == choice ? .isSelected : [])
-                        }
-                    }
-                    .entrance(entrance, step: 0)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
+                    OpponentPicker(selection: $draft.opponent, isStacked: dynamicTypeSize.isAccessibilitySize)
+                        .entrance(entrance, step: 0)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                 } header: {
                     SheetSectionHeader(title: "Opponent")
                 } footer: {
@@ -72,20 +60,9 @@ struct NewGameSheet: View {
 
                 if draft.opponent == .computer {
                     Section {
-                        Picker("Difficulty", selection: $draft.difficulty) {
-                            ForEach(Difficulty.allCases) { difficulty in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(difficulty.displayName)
-                                    Text(difficulty.tagline)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .tag(difficulty)
-                            }
-                        }
-                        .pickerStyle(.inline)
-                        .labelsHidden()
-                        .entrance(entrance, step: 1)
+                        DifficultyDial(selection: $draft.difficulty)
+                            .entrance(entrance, step: 1)
+                            .listRowInsets(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
                     } header: {
                         SheetSectionHeader(title: "Difficulty")
                     }
@@ -125,6 +102,8 @@ struct NewGameSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Next") { showsPlacement = true }
                         .disabled(!canContinue)
+                        // Once when the draft completes, so the way on is noticed.
+                        .pulse(on: canContinue, scale: 1.12)
                 }
             }
             .navigationDestination(isPresented: $showsPlacement) {
@@ -177,12 +156,114 @@ struct NewGameSheet: View {
     }
 }
 
+/// The three ways to find an opponent as cards, with one glowing selection frame that slides
+/// between them on `Motion.Curve.snap` (LOB-6): the chosen icon bounces, the others settle to 55 %
+/// white. Stacked (accessibility sizes), the cards are full-width rows.
+struct OpponentPicker: View {
+    @Binding var selection: OpponentChoice
+    var isStacked = false
+    @Environment(\.motionPolicy) private var policy
+    @Namespace private var frame
+
+    var body: some View {
+        let cards = isStacked ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
+        cards {
+            ForEach(OpponentChoice.allCases) { choice in
+                Button {
+                    withAnimation(Motion.Curve.snap.policy(policy)) { selection = choice }
+                } label: {
+                    OpponentCard(choice: choice, isSelected: selection == choice, isStacked: isStacked, frame: frame)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(choice.title)
+                .accessibilityHint(choice.subtitle)
+                .accessibilityAddTraits(selection == choice ? .isSelected : [])
+            }
+        }
+    }
+}
+
+/// Difficulty as a three-position dial (LOB-6): a capsule thumb slides under Cadet, Captain and
+/// Admiral, the tagline crossfades, and one to three chevrons light 60 ms apart under the choice
+/// (together below the full tier). VoiceOver gets a plain picker.
+struct DifficultyDial: View {
+    @Binding var selection: Difficulty
+    @Environment(\.motionPolicy) private var policy
+    @Namespace private var thumb
+
+    private static let chevronStagger: TimeInterval = 0.06
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 0) {
+                ForEach(Difficulty.allCases) { difficulty in
+                    position(difficulty)
+                }
+            }
+            .padding(4)
+            .background(Capsule().fill(Color.white.opacity(0.06)))
+            Text(selection.tagline)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .contentTransition(.opacity)
+                .animation(Motion.Curve.fade.policy(policy), value: selection)
+        }
+        .accessibilityRepresentation {
+            Picker("Difficulty", selection: $selection) {
+                ForEach(Difficulty.allCases) { difficulty in
+                    Text(difficulty.displayName).tag(difficulty)
+                }
+            }
+        }
+    }
+
+    private func position(_ difficulty: Difficulty) -> some View {
+        let isChosen = selection == difficulty
+        let rank = (Difficulty.allCases.firstIndex(of: difficulty) ?? 0) + 1
+        let staggers = policy.tier == .full
+        return Button {
+            withAnimation(Motion.Curve.snap.policy(policy)) { selection = difficulty }
+        } label: {
+            VStack(spacing: 5) {
+                Text(difficulty.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(isChosen ? Color.white : Color.secondary)
+                HStack(spacing: 2) {
+                    ForEach(0..<rank, id: \.self) { index in
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 8, weight: .heavy))
+                            .foregroundStyle(isChosen ? Theme.reticle : Color.white.opacity(0.35))
+                            .animation(Motion.Curve.state.policy(policy).delay(staggers ? Double(index) * Self.chevronStagger : 0), value: isChosen)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background {
+                if isChosen {
+                    Capsule()
+                        .fill(Theme.reticle.opacity(0.18))
+                        .overlay(Capsule().strokeBorder(Theme.reticle.opacity(0.6), lineWidth: 1))
+                        .matchedGeometryEffect(id: "thumb", in: thumb)
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isChosen ? .isSelected : [])
+    }
+}
+
 /// One of the three ways to find an opponent, as a selectable card. Stacked cards are full-width
-/// rows with the whole title, which wraps if it must.
+/// rows with the whole title, which wraps if it must. The selected card carries the shared
+/// selection frame, which `frame` lets slide from the card before.
 private struct OpponentCard: View {
     let choice: OpponentChoice
     let isSelected: Bool
     var isStacked = false
+    let frame: Namespace.ID
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -212,8 +293,15 @@ private struct OpponentCard: View {
         .padding(.vertical, isStacked ? 14 : 18)
         .padding(.horizontal, isStacked ? 16 : 0)
         .background(shape.fill(isSelected ? Theme.reticle.opacity(0.16) : Theme.rowBackground))
-        .overlay(shape.strokeBorder(isSelected ? Theme.reticle.opacity(0.9) : Color.white.opacity(0.1), lineWidth: isSelected ? 1.5 : 1))
-        .shadow(color: isSelected ? Theme.reticle.opacity(0.3) : .clear, radius: 10)
+        .overlay {
+            if isSelected {
+                shape.strokeBorder(Theme.reticle.opacity(0.9), lineWidth: 1.5)
+                    .shadow(color: Theme.reticle.opacity(0.35), radius: 10)
+                    .matchedGeometryEffect(id: "selection", in: frame)
+            } else {
+                shape.strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+            }
+        }
         .contentShape(shape)
     }
 }
@@ -236,13 +324,15 @@ private struct FriendSearchField: View {
     @Binding var username: String
     @State private var suggestions: [PlayerSummary] = []
 
+    private static let suggestionStagger: TimeInterval = 0.04
+
     var body: some View {
         Group {
             TextField("Username", text: $username)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.done)
-            ForEach(suggestions) { player in
+            ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, player in
                 Button {
                     username = player.username
                     suggestions = []
@@ -258,6 +348,8 @@ private struct FriendSearchField: View {
                     }
                 }
                 .accessibilityLabel("\(player.username), rating \(player.rating)")
+                // The suggestions settle one after another, 40 ms apart.
+                .staggeredEntrance(index: index, trigger: suggestions.map(\.id), stagger: Self.suggestionStagger)
             }
         }
         .task(id: username) {

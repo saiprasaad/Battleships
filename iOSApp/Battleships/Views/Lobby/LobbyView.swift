@@ -499,7 +499,7 @@ private struct LobbyHero: View {
                     .frame(width: 230, height: 230)
                     .offset(x: 92, y: -62)
                     .opacity(0.85)
-                HorizonScene(shipPosition: 0.68, shipWidth: 128)
+                HorizonScene(shipPosition: 0.68, shipWidth: 128, isLively: true, shipVoyages: true)
                     .frame(height: 84)
                     .frame(maxHeight: .infinity, alignment: .bottom)
                     .visualEffect { content, proxy in

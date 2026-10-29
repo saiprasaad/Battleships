@@ -228,8 +228,10 @@ struct ScreenshotTests {
         try await Self.prepareStage()
         let folder = directory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        // Daylight, whatever the simulator's clock says, so strips compare run to run.
+        // Daylight, whatever the simulator's clock says, so strips compare run to run; the horizon
+        // lives on its own clock here (the stills hold it).
         DayCycle.fixedPalette = .day
+        HorizonLife.fixedTime = nil
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let (view, controller, action) = try make()
         let window = UIWindow(windowScene: scene)
@@ -288,6 +290,8 @@ struct ScreenshotTests {
     ) async throws {
         try await Self.prepareStage()
         DayCycle.fixedPalette = .day
+        // The horizon at a moment with the ship, a flight of gulls and the lit lamp all in the picture.
+        HorizonLife.fixedTime = 66
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(origin: .zero, size: size ?? scene.screen.bounds.size)
