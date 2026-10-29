@@ -21,7 +21,8 @@ struct TargetBoard: View {
     @State private var refusals = 0
     /// Bumped at the final stamp of a won battle: the gold sweep.
     @State private var finaleSweeps = 0
-    /// The board leans 1.12 toward the final blow through its slow motion.
+    /// The board leans 1.12 toward the final blow through its slow motion, growing from its top edge
+    /// so the push-in never climbs over the section's title.
     @State private var isFinaleLeaning = false
 
     /// How far the board leans toward a cell its shell is heading for, and toward the final blow.
@@ -168,7 +169,7 @@ struct TargetBoard: View {
         .landingPunch(on: ledger.landings)
         // On top of the host's landing shake (4), so a sunk totals 10.
         .shakes(on: ledger.sunkLandings, amplitude: 6, amplitudeY: 3, roll: 1)
-        .scaleEffect(leanScale, anchor: Self.leanAnchor(for: leanCell, rules: perspective.rules))
+        .scaleEffect(leanScale, anchor: Self.leanAnchor(for: leanCell, rules: perspective.rules, fromTop: !hasShellInFlight))
         .animation(leanScale > 1 ? Motion.Curve.snap.policy(policy) : Motion.Curve.settle.policy(policy), value: leanScale)
         .animation(Motion.Curve.state.policy(policy), value: seaState)
         .animation(Motion.Curve.state.policy(policy), value: isLit)
@@ -211,12 +212,14 @@ struct TargetBoard: View {
     }
 
     /// Where on the board a cell sits, as the anchor of the lean toward it; the centre without one.
-    private static func leanAnchor(for cell: Coordinate?, rules: Rules) -> UnitPoint {
-        guard let cell else { return .center }
+    /// `fromTop` keeps the board's top edge in place (the finale's deeper lean grows downward, into the
+    /// room above the Fire bar, rather than up over the section's title).
+    private static func leanAnchor(for cell: Coordinate?, rules: Rules, fromTop: Bool = false) -> UnitPoint {
+        guard let cell else { return fromTop ? .top : .center }
         let side: CGFloat = 300
         let geometry = BoardGeometry(boardSize: rules.boardSize, side: side, showsLabels: true)
         let center = geometry.center(of: cell)
-        return UnitPoint(x: center.x / side, y: center.y / side)
+        return UnitPoint(x: center.x / side, y: fromTop ? 0 : center.y / side)
     }
 
     private func targetDescription(at coordinate: Coordinate, aim: Coordinate?) -> String {
