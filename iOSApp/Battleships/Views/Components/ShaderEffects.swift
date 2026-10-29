@@ -15,13 +15,14 @@ enum ShaderEffects {
     /// compiles their pipelines, and leaves it true.
     @MainActor static private(set) var isAvailable = true
 
-    /// Compiles every shader's pipeline ahead of its first draw, where iOS can (17.4 and later); before
-    /// that the `ShaderWarmup` view's probes do the same by drawing. The app calls it at launch
+    /// Compiles every shader's pipeline ahead of its first draw, where iOS can (18 and later); on iOS
+    /// 17 the `ShaderWarmup` view's probes do the same by drawing. Each is compiled with arguments
+    /// of the types its callers bind, as `Shader.compile(as:)` requires. The app calls it at launch
     /// (`RootView`), the screenshot tests before their first strip. A shader that fails to compile is
     /// left to its call site's fallback.
     @MainActor
     static func warmUp() async {
-        guard #available(iOS 17.4, *) else { return }
+        guard #available(iOS 18, *) else { return }
         let unit = CGSize(width: 1, height: 1)
         try? await tint(.white).compile(as: .colorEffect)
         try? await water(time: 0, size: unit, seaState: 0).compile(as: .colorEffect)
