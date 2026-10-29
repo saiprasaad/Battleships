@@ -41,6 +41,8 @@ struct Impact: Identifiable, Equatable, Sendable {
     /// The shot that ended the game.
     let isFinal: Bool
     let start: Date
+    /// A miss right beside one of the shooter's earlier hits: a taller column, a sharper splash.
+    var isClose = false
 }
 
 /// The enemy's shell on its way: the home board shows where it will land, from `start` until `lands`.
@@ -1211,8 +1213,20 @@ final class BattleController {
             }
         }
 
-        let impact = Impact(id: UUID(), board: board, coordinate: move.target, isHit: isHit, isSunk: isSunk, isFinal: landing.isFinal, start: now)
+        let isClose = !isHit && Self.isCloseMiss(move, isMine: isMine, in: perspective)
+        let impact = Impact(
+            id: UUID(), board: board, coordinate: move.target, isHit: isHit, isSunk: isSunk, isFinal: landing.isFinal, start: now,
+            isClose: isClose
+        )
         impacts.append(impact)
+        // Where and whose the shot was shapes its sound and rumble: panned by column (mirrored for
+        // shells on the player's waters), a take picked by the cell, duller on the player's own hull.
+        let variation = FeedbackVariation(
+            pan: Self.pan(for: move.target, in: perspective.rules, isMine: isMine),
+            seed: Self.seed(for: move.target),
+            isMine: isMine,
+            isFinal: landing.isFinal
+        )
         let impactID = impact.id
         schedule([BattleSequence.Beat(at: beats.impactLinger) { [weak self] in
             self?.impacts.removeAll { $0.id == impactID }
@@ -1221,13 +1235,13 @@ final class BattleController {
         if landing.isFinal {
             clock.hitStop(Timing.finalHitStop, at: now)
             clock.slowMotion(scale: Timing.finalTimeScale, for: Timing.finalSlowMotion, at: now)
-            app.feedback.play(.finalBlow)
+            app.feedback.play(.finalBlow, variation: variation)
         } else {
             clock.hitStop(isSunk ? Timing.sunkHitStop : Timing.hitStop, at: now)
             switch move.result {
-            case .miss: app.feedback.play(.miss)
-            case .hit: app.feedback.play(.hit)
-            case .sunk: app.feedback.play(.sunk)
+            case .miss: app.feedback.play(isClose ? .nearMiss : .miss, variation: variation)
+            case .hit: app.feedback.play(isMine ? .hit : .hitOwn, variation: variation)
+            case .sunk: app.feedback.play(isMine ? .sunk : .sunkOwn, variation: variation)
             }
         }
         announce(move, isMine: isMine)
@@ -1260,10 +1274,11 @@ final class BattleController {
             ])
         }
         if lastShipNews {
-            app.feedback.play(.lastShip)
+            // The enemy's last ship: the sting rises.
+            app.feedback.play(.lastShip, variation: FeedbackVariation(isMine: false))
         }
         if isMine, isHit, hitStreak >= 3, hitStreak % 2 == 1 {
-            app.feedback.play(.streak)
+            app.feedback.play(.streak, variation: FeedbackVariation(count: hitStreak))
         }
 
         if landing.isFinal {
@@ -1307,6 +1322,33 @@ final class BattleController {
         schedule([BattleSequence.Beat(at: beats.stampHold) { [weak self] in
             self?.stamps.removeAll { $0.id == stampID }
         }])
+    }
+
+    /// Where a shot sounds from: its column across the stereo field (±0.6), mirrored for shells
+    /// landing on the player's own waters.
+    private static func pan(for target: Coordinate, in rules: Rules, isMine: Bool) -> Double {
+        let half = Double(max(rules.boardSize - 1, 1)) / 2
+        let across = (Double(target.column) - half) / half
+        return min(1, max(-1, across * 0.6)) * (isMine ? 1 : -1)
+    }
+
+    /// A take for the cell, so the same square always sounds the same and neighbours differ.
+    private static func seed(for target: Coordinate) -> Int {
+        (target.row * 31 + target.column * 7) % 97 + 1
+    }
+
+    /// Whether a miss fell right beside one of the shooter's own earlier hits (public information
+    /// on either board), which makes it a near miss.
+    private static func isCloseMiss(_ move: Move, isMine: Bool, in perspective: BattlePerspective) -> Bool {
+        let neighbours = [
+            move.target.offsetBy(rows: -1, columns: 0), move.target.offsetBy(rows: 1, columns: 0),
+            move.target.offsetBy(rows: 0, columns: -1), move.target.offsetBy(rows: 0, columns: 1),
+        ]
+        return neighbours.contains { cell in
+            guard perspective.rules.contains(cell) else { return false }
+            let mark = isMine ? perspective.targetMark(at: cell) : perspective.homeMark(at: cell)
+            return mark == .hit || mark == .sunk
+        }
     }
 
     private func announce(_ move: Move, isMine: Bool) {
