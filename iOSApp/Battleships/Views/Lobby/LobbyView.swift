@@ -44,53 +44,12 @@ struct LobbyView: View {
     var body: some View {
         let isCovered = newGame != nil || showsSignIn
         NavigationStack(path: $path) {
+            // Each section is its own declaration: one list body held every row and the type
+            // checker gave up on it.
             List {
-                Section {
-                    LobbyHero(
-                        isSignedIn: app.isSignedIn,
-                        rating: app.session.account?.stats.rating,
-                        ratingDelta: app.session.ratingDelta
-                    ) {
-                        presentNewBattle(afterHandoff: true)
-                    }
-                }
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-
-                if !app.isSignedIn {
-                    Section {
-                        SignInPrompt { showsSignIn = true }
-                            .staggeredEntrance(index: 0, trigger: rowEntrance)
-                    }
-                    .listRowBackground(Theme.rowBackground)
-                } else if groups.isEmpty, let error = app.online.refreshError {
-                    // The inline row stays for the empty state; otherwise a toast carries the news.
-                    Section {
-                        Label(error, systemImage: "wifi.exclamationmark")
-                            .foregroundStyle(.secondary)
-                    }
-                    .listRowBackground(Theme.rowBackground)
-                }
-
-                let indices = rowIndices
-                ForEach(groups) { group in
-                    Section {
-                        ForEach(group.entries) { entry in
-                            NavigationLink(value: entry.route) {
-                                GameRow(entry: entry, sheen: sheens[entry.id] ?? 0)
-                            }
-                            .staggeredEntrance(index: indices[entry.id] ?? Timing.Stagger.maxItems, trigger: rowEntrance)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                swipeActions(for: entry)
-                            }
-                            .playerContextMenu(opponent(in: entry), gameID: entry.id, request: $moderation)
-                        }
-                    } header: {
-                        LobbySectionHeader(section: group.section, count: group.entries.count)
-                    }
-                    .listRowBackground(Theme.rowBackground)
-                }
-
+                heroSection
+                noticeSection
+                gameSections
                 if groups.isEmpty {
                     Section {
                         emptyState
@@ -213,6 +172,63 @@ struct LobbyView: View {
                 app.session.clearRatingDelta()
             }
         }
+    }
+
+    private var heroSection: some View {
+        Section {
+            LobbyHero(
+                isSignedIn: app.isSignedIn,
+                rating: app.session.account?.stats.rating,
+                ratingDelta: app.session.ratingDelta
+            ) {
+                presentNewBattle(afterHandoff: true)
+            }
+        }
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+    }
+
+    /// The sign-in prompt, or the inline error row of an empty list; otherwise a toast carries the news.
+    @ViewBuilder
+    private var noticeSection: some View {
+        if !app.isSignedIn {
+            Section {
+                SignInPrompt { showsSignIn = true }
+                    .staggeredEntrance(index: 0, trigger: rowEntrance)
+            }
+            .listRowBackground(Theme.rowBackground)
+        } else if groups.isEmpty, let error = app.online.refreshError {
+            Section {
+                Label(error, systemImage: "wifi.exclamationmark")
+                    .foregroundStyle(.secondary)
+            }
+            .listRowBackground(Theme.rowBackground)
+        }
+    }
+
+    private var gameSections: some View {
+        let indices = rowIndices
+        return ForEach(groups) { group in
+            Section {
+                ForEach(group.entries) { entry in
+                    gameRow(entry, index: indices[entry.id] ?? Timing.Stagger.maxItems)
+                }
+            } header: {
+                LobbySectionHeader(section: group.section, count: group.entries.count)
+            }
+            .listRowBackground(Theme.rowBackground)
+        }
+    }
+
+    private func gameRow(_ entry: LobbyEntry, index: Int) -> some View {
+        NavigationLink(value: entry.route) {
+            GameRow(entry: entry, sheen: sheens[entry.id] ?? 0)
+        }
+        .staggeredEntrance(index: index, trigger: rowEntrance)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            swipeActions(for: entry)
+        }
+        .playerContextMenu(opponent(in: entry), gameID: entry.id, request: $moderation)
     }
 
     /// The empty list's one row: the sonar loader while the online games load, the empty sea after.
