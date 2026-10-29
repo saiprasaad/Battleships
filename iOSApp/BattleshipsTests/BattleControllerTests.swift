@@ -463,7 +463,9 @@ struct BattleControllerTests {
         let incomingAt = try #require(feedback.events.firstIndex(of: .incoming))
         let whistleAt = try #require(feedback.events.firstIndex(of: .whistle))
         let myLandingAt = try #require(feedback.events.firstIndex(of: .miss))
-        let theirLandingAt = try #require(feedback.events.lastIndex { $0 == .miss || $0 == .hit || $0 == .sunk })
+        // The enemy's landing sounds as a miss, a near miss, or a hit or sunk on the player's own hull.
+        let landings: Set<FeedbackEvent> = [.miss, .nearMiss, .hit, .hitOwn, .sunk, .sunkOwn]
+        let theirLandingAt = try #require(feedback.events.lastIndex { landings.contains($0) })
         #expect(myLandingAt < incomingAt, "the telegraph comes after the player's landing")
         #expect(incomingAt < whistleAt)
         #expect(whistleAt < theirLandingAt, "and before the enemy's")
