@@ -17,7 +17,7 @@ struct ShaderTests {
         window.rootViewController = UIHostingController(
             rootView: Color.white
                 .frame(width: 120, height: 120)
-                .colorEffect(ShaderEffects.tint(.red))
+                .colorEffect(ShaderEffects.tint(Color(red: 1, green: 0, blue: 0)))
         )
         window.makeKeyAndVisible()
         try await Task.sleep(for: .seconds(1))
@@ -27,7 +27,8 @@ struct ShaderTests {
         }
         window.isHidden = true
         let pixel = try #require(Self.pixel(at: CGPoint(x: 60, y: 60), in: image))
-        #expect(pixel.red > 0.9 && pixel.green < 0.1 && pixel.blue < 0.1, "expected red, got \(pixel)")
+        // Pure red, not Color.red: the system red is #FF453A in the dark appearance.
+        #expect(pixel.red > 0.9 && pixel.green < 0.15 && pixel.blue < 0.15, "expected red, got \(pixel)")
     }
 
     /// The colour at `point` (in points), or nil if the image can't be read.
