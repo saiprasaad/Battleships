@@ -308,12 +308,18 @@ struct OutcomeStrip: View {
         ZStack {
             OceanBackdrop()
             if shows.isOn {
+                // The ceremony as the battle shows it: a win online with rating news, a loss to the computer.
                 GameOverOverlay(
-                    didWin: didWin,
-                    reason: .fleetDestroyed,
-                    opponentName: opponent,
-                    stats: ShotStats(shotsFired: 41, hits: 17),
-                    celebrates: didWin,
+                    summary: GameOverSummary(
+                        didWin: didWin,
+                        reason: .fleetDestroyed,
+                        opponentName: opponent,
+                        stats: ShotStats(shotsFired: 41, hits: 17),
+                        ratingBefore: didWin ? 1166 : nil,
+                        ratingDelta: didWin ? 18 : nil,
+                        isPersonalBest: didWin
+                    ),
+                    presentation: .ceremony,
                     onRematch: {},
                     onClose: {}
                 )
