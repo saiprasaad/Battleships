@@ -28,14 +28,14 @@ extension ScreenshotTests {
         let promoted = try Showcase(urlSession: RatingRefreshServer.session())
         try await filmstrip("profile-rating", to: output, seconds: 3.4) {
             let app = promoted.app
-            return (AnyView(ProfileView().environment(app)), nil, { Task { await app.session.refreshAccount() } })
+            return (AnyView(ProfileView().environment(app)), nil, { @MainActor in Task { await app.session.refreshAccount() } })
         }
 
         // Changing the Effects level plays one hit on the preview's water.
         let showcase = try Showcase()
         try await filmstrip("effects-preview", to: output, seconds: 2.2) {
             let app = showcase.app
-            return (AnyView(NavigationStack { EffectsSettingsView() }.environment(app)), nil, { app.settings.effectsLevel = .reduced })
+            return (AnyView(NavigationStack { EffectsSettingsView() }.environment(app)), nil, { @MainActor in app.settings.effectsLevel = .reduced })
         }
     }
 }

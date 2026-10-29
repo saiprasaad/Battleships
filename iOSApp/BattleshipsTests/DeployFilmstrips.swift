@@ -28,7 +28,7 @@ extension ScreenshotTests {
             let screen = NavigationStack {
                 FleetPlacementView(mode: .classic, confirmTitle: "Start Battle", director: director) { _ in }
             }
-            return (AnyView(screen.environment(app)), nil, { director.rotate(0) })
+            return (AnyView(screen.environment(app)), nil, { @MainActor in director.rotate(0) })
         }
 
         // The request is instant; the hand-over waits for the departure, then holds on the empty board.
@@ -40,7 +40,7 @@ extension ScreenshotTests {
                     try? await Task.sleep(for: .seconds(3))
                 }
             }
-            return (AnyView(screen.environment(app)), nil, { director.deploy() })
+            return (AnyView(screen.environment(app)), nil, { @MainActor in director.deploy() })
         }
     }
 }

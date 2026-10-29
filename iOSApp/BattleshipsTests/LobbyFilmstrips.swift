@@ -29,17 +29,17 @@ extension ScreenshotTests {
                 knownOpponentShips: [],
                 moves: []
             )
-            return (AnyView(RootView().environment(app)), nil, { app.online.apply(detail) })
+            return (AnyView(RootView().environment(app)), nil, { @MainActor in app.online.apply(detail) })
         }
 
         // The New Battle sheet rises as glass over the lobby, which dims and holds its sea still.
         try await filmstrip("sheet-new-battle", to: output, seconds: 2.4) {
-            (AnyView(RootView().environment(app)), nil, { app.newGameRequest = NewGameDraft() })
+            (AnyView(RootView().environment(app)), nil, { @MainActor in app.newGameRequest = NewGameDraft() })
         }
 
         // A success toast slides in, its icon bounces, and its hairline drains.
         try await filmstrip("toast", to: output, seconds: 2.4) {
-            (AnyView(RootView().environment(app)), nil, { ToastCenter.shared.show(.success, "Challenge sent to nemo") })
+            (AnyView(RootView().environment(app)), nil, { @MainActor in ToastCenter.shared.show(.success, "Challenge sent to nemo") })
         }
     }
 }

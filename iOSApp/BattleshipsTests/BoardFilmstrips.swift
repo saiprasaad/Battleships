@@ -35,7 +35,7 @@ extension ScreenshotTests {
         let finalShotGame = match.id
         try await filmstrip("battle-final-shot", to: output, seconds: 4.0) {
             let controller = BattleController(route: .solo(finalShotGame), app: app)
-            return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, { controller.tapTarget(last); Task { await controller.fire() } })
+            return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, { @MainActor in controller.tapTarget(last); Task { await controller.fire() } })
         }
 
         // A battle that has just begun: BATTLE STATIONS, with the fleet sailing in from the first frame.
