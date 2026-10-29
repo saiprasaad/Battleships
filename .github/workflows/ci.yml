@@ -128,6 +128,8 @@ jobs:
           xcrun simctl io "$udid" recordVideo --codec h264 --force build/motion.mp4 > build/recording.log 2>&1 &
           echo "pid=$!" >> "$GITHUB_OUTPUT"
           sleep 3
+          # When the recording began (Unix time), to line the video up with the test's timeline.
+          date +%s > build/recording-start.txt
       - name: Build and test
         env:
           # Lets the screenshot test render the main screens (see BattleshipsTests/ScreenshotTests.swift).
@@ -155,12 +157,22 @@ jobs:
             done
           fi
           ls -la build/motion.mp4 2> /dev/null || cat build/recording.log || true
+          # Crash reports from the simulator's own processes (its display server, SpringBoard) and
+          # the app, in case the display dropped the app during the tests.
+          mkdir -p build/crashes
+          find "$HOME/Library/Logs/DiagnosticReports" -newer build/recording-start.txt \
+            \( -name '*SpringBoard*' -o -name '*backboardd*' -o -name '*Battleships*' -o -name '*launchd_sim*' \) \
+            -exec cp {} build/crashes/ \; 2> /dev/null || true
+          ls build/crashes
       - name: Upload the simulator video
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: motion-video
-          path: build/motion.mp4
+          path: |
+            build/motion.mp4
+            build/recording-start.txt
+            build/crashes
           if-no-files-found: warn
       - name: Upload screenshots
         if: always()

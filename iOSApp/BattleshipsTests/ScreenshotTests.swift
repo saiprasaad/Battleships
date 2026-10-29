@@ -151,14 +151,6 @@ struct ScreenshotTests {
             return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, { controller.tapTarget(water); Task { await controller.fire() } })
         }
 
-        // The end of a game, from the moment the result is shown.
-        for (name, didWin, opponent) in [("victory", true, "ahab"), ("defeat", false, "Computer (Admiral)")] {
-            try await filmstrip(name, to: output, seconds: 3.4) {
-                let shows = ShowsOutcome()
-                return (AnyView(OutcomeStrip(shows: shows, didWin: didWin, opponent: opponent)), nil, { shows.isOn = true })
-            }
-        }
-
         // Screens whose entrance is the show.
         try await filmstrip("welcome", to: output, seconds: 3.0, settle: 0) {
             (AnyView(WelcomeView {}), nil, {})
@@ -168,6 +160,17 @@ struct ScreenshotTests {
         }
         try await filmstrip("challenge", to: output, seconds: 2.6, settle: 0) {
             (AnyView(NavigationStack { BattleView(route: .online(showcase.challenge), app: app) }.environment(app)), nil, {})
+        }
+
+        // The end of a game, from the moment the result is shown. Last, because on CI's simulator
+        // the display has been seen to drop the app when this overlay appears (the app itself
+        // carries on); the timeline's state column and the collected crash reports say whether
+        // that happened.
+        for (name, didWin, opponent) in [("victory", true, "ahab"), ("defeat", false, "Computer (Admiral)")] {
+            try await filmstrip(name, to: output, seconds: 3.4) {
+                let shows = ShowsOutcome()
+                return (AnyView(OutcomeStrip(shows: shows, didWin: didWin, opponent: opponent)), nil, { shows.isOn = true })
+            }
         }
     }
 
@@ -190,8 +193,10 @@ struct ScreenshotTests {
         window.rootViewController = UIHostingController(rootView: FilmstripMarker(title: name, color: Color(red: 1, green: 0, blue: 1)))
         window.makeKeyAndVisible()
         try await Task.sleep(for: .milliseconds(700))
+        // Name, length, when it started (Unix time, to line up with CI's video), and the app's
+        // state then (0 active, 1 inactive, 2 background).
         let timeline = directory.appendingPathComponent("timeline.txt")
-        let entry = "\(name) \(seconds)s\n"
+        let entry = "\(name) \(seconds)s start=\(Date().timeIntervalSince1970) state=\(UIApplication.shared.applicationState.rawValue) scenes=\(UIApplication.shared.connectedScenes.count)\n"
         try ((try? String(contentsOf: timeline, encoding: .utf8)) ?? "").appending(entry).write(to: timeline, atomically: true, encoding: .utf8)
         window.rootViewController = UIHostingController(rootView: view)
         controller?.viewDidAppear()
@@ -221,6 +226,8 @@ struct ScreenshotTests {
             try await Task.sleep(for: .milliseconds(80))
         }
         controller?.viewDidDisappear()
+        let after = "  \(name) end=\(Date().timeIntervalSince1970) state=\(UIApplication.shared.applicationState.rawValue)\n"
+        try ((try? String(contentsOf: timeline, encoding: .utf8)) ?? "").appending(after).write(to: timeline, atomically: true, encoding: .utf8)
         // An end card, so the strip's last frame is unambiguous in the video.
         window.rootViewController = UIHostingController(rootView: FilmstripMarker(title: "end", color: Color(red: 0, green: 1, blue: 0)))
         try await Task.sleep(for: .milliseconds(400))
