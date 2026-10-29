@@ -10,21 +10,11 @@ import UIKit
 @Suite("Shaders", .serialized)
 struct ShaderTests {
     @Test func shadersCompileAndRun() async throws {
-        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 120, height: 120)
-        window.windowLevel = .alert + 1
-        window.rootViewController = UIHostingController(
-            rootView: Color.white
-                .frame(width: 120, height: 120)
-                .colorEffect(ShaderEffects.tint(Color(red: 1, green: 0, blue: 0)))
+        let window = try Self.makeWindow(
+            showing: Color.white.colorEffect(ShaderEffects.tint(Color(red: 1, green: 0, blue: 0)))
         )
-        window.makeKeyAndVisible()
         try await Task.sleep(for: .seconds(1))
-
-        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-            _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
-        }
+        let image = Self.snapshot(window)
         window.isHidden = true
         let pixel = try #require(Self.pixel(at: CGPoint(x: 60, y: 60), in: image))
         // Pure red, not Color.red: the system red is #FF453A in the dark appearance.
@@ -145,16 +135,140 @@ struct ShaderTests {
         #expect(stained.red + stained.green + stained.blue > 0.05, "the stain should darken the water, not black it out, got \(stained)")
     }
 
+    /// `oceanDrift` lays its three colours top to bottom.
+    @Test func oceanDriftBlendsThreeBandsByHeight() async throws {
+        let size = CGSize(width: 120, height: 120)
+        let image = try await Self.render(
+            Color.white.colorEffect(ShaderEffects.oceanDrift(
+                time: 0,
+                size: size,
+                top: Color(red: 1, green: 0, blue: 0),
+                middle: Color(red: 0, green: 1, blue: 0),
+                bottom: Color(red: 0, green: 0, blue: 1)
+            )),
+            settle: .milliseconds(600)
+        )
+        let top = try #require(Self.pixel(at: CGPoint(x: 60, y: 10), in: image))
+        let middle = try #require(Self.pixel(at: CGPoint(x: 60, y: 60), in: image))
+        let bottom = try #require(Self.pixel(at: CGPoint(x: 60, y: 110), in: image))
+        #expect(top.red > top.green && top.red > top.blue, "expected the top band to be red, got \(top)")
+        #expect(middle.green > middle.red && middle.green > middle.blue, "expected the middle band to be green, got \(middle)")
+        #expect(bottom.blue > bottom.red && bottom.blue > bottom.green, "expected the bottom band to be blue, got \(bottom)")
+    }
+
+    /// `chromaticSplit` leaves a layer alone at offset 0, and pulls red and blue apart at an edge otherwise.
+    @Test func chromaticSplitPullsRedAndBlueApartAtAnEdge() async throws {
+        let reach = CGSize(width: 8, height: 0)
+        let whole = try await Self.render(
+            Color(red: 1, green: 0, blue: 0)
+                .layerEffect(ShaderEffects.chromaticSplit(offset: .zero), maxSampleOffset: reach),
+            settle: .milliseconds(600)
+        )
+        let centre = try #require(Self.pixel(at: CGPoint(x: 60, y: 60), in: whole))
+        #expect(centre.red > 0.9 && centre.green < 0.15 && centre.blue < 0.15, "offset 0 should leave red alone, got \(centre)")
+
+        // Black to the left of x = 60, white to the right.
+        let fill = HStack(spacing: 0) {
+            Color.black
+            Color.white
+        }
+        let split = try await Self.render(
+            fill.layerEffect(ShaderEffects.chromaticSplit(offset: reach), maxSampleOffset: reach),
+            settle: .milliseconds(250),
+            landmark: CGPoint(x: 90, y: 60)
+        )
+        // Just left of the edge, red is sampled from the white side and blue from the black side.
+        let edge = try #require(Self.pixel(at: CGPoint(x: 56, y: 60), in: split))
+        #expect(edge.red - edge.blue > 0.5, "expected red to lead blue beside the edge, got \(edge)")
+        let black = try #require(Self.pixel(at: CGPoint(x: 20, y: 60), in: split))
+        let white = try #require(Self.pixel(at: CGPoint(x: 100, y: 60), in: split))
+        #expect(black.red < 0.1 && black.blue < 0.1, "away from the edge the black side should stay black, got \(black)")
+        #expect(white.red > 0.9 && white.blue > 0.9, "away from the edge the white side should stay white, got \(white)")
+    }
+
+    /// `rain` draws nothing at density 0 and sparse bright streaks at density 1.
+    @Test func rainEmitsSparseStreaks() async throws {
+        let size = CGSize(width: 120, height: 120)
+        let dry = try await Self.render(
+            Color.white.colorEffect(ShaderEffects.rain(time: 0, size: size, density: 0, wind: 0, tint: .white)),
+            settle: .milliseconds(600)
+        )
+        let dryPixel = try #require(Self.pixel(at: CGPoint(x: 60, y: 60), in: dry))
+        #expect(dryPixel.red > 0.9 && dryPixel.green > 0.9 && dryPixel.blue > 0.9, "density 0 should leave white alone, got \(dryPixel)")
+
+        let wet = try await Self.render(
+            Color.black.colorEffect(ShaderEffects.rain(time: 0, size: size, density: 1, wind: 0, tint: .white)),
+            settle: .milliseconds(250)
+        )
+        var lit = 0
+        var total = 0
+        for y in stride(from: 3, through: 117, by: 6) {
+            for x in stride(from: 3, through: 117, by: 6) {
+                let sample = try #require(Self.pixel(at: CGPoint(x: x, y: y), in: wet))
+                total += 1
+                if sample.red + sample.green + sample.blue > 0.15 {
+                    lit += 1
+                }
+            }
+        }
+        #expect(total == 400)
+        #expect(lit >= 1, "expected some streaks over black")
+        #expect(lit * 10 < total * 6, "rain should be sparse, but \(lit) of \(total) samples were lit")
+    }
+
+    /// `scanlines` leaves the picture alone at opacity 0 and darkens every other row otherwise.
+    @Test func scanlinesDarkenEveryOtherRow() async throws {
+        let size = CGSize(width: 120, height: 120)
+        let plain = try await Self.render(
+            Color(red: 1, green: 0, blue: 0).colorEffect(ShaderEffects.scanlines(time: 0, size: size, opacity: 0)),
+            settle: .milliseconds(600)
+        )
+        let red = try #require(Self.pixel(at: CGPoint(x: 60, y: 60), in: plain))
+        #expect(red.red > 0.9 && red.green < 0.15 && red.blue < 0.15, "opacity 0 should leave red alone, got \(red)")
+
+        let lined = try await Self.render(
+            Color.white.colorEffect(ShaderEffects.scanlines(time: 0, size: size, opacity: 1)),
+            settle: .milliseconds(250)
+        )
+        let even = try #require(Self.pixel(at: CGPoint(x: 60, y: 60), in: lined))
+        let odd = try #require(Self.pixel(at: CGPoint(x: 60, y: 61), in: lined))
+        #expect(abs(even.red - odd.red) > 0.2, "rows 60 and 61 should differ, got \(even) and \(odd)")
+    }
+
+    /// `ShaderWarmup` draws every shader without showing anything, and leaves the library available.
+    @Test func shaderWarmupIsInvisible() async throws {
+        let image = try await Self.render(
+            Color(red: 1, green: 0, blue: 0).overlay { ShaderWarmup() },
+            settle: .milliseconds(600)
+        )
+        let centre = try #require(Self.pixel(at: CGPoint(x: 60, y: 60), in: image))
+        #expect(centre.red > 0.9 && centre.green < 0.15 && centre.blue < 0.15, "the warm-up should show nothing over red, got \(centre)")
+        #expect(ShaderEffects.isAvailable)
+    }
+
+    /// `shaderColorEffect` runs the shader when enabled and draws the fallback over the content otherwise.
+    @Test func shaderColorEffectFallsBackToTheOverlay() async throws {
+        let tint = ShaderEffects.tint(Color(red: 1, green: 0, blue: 0))
+        let shaded = try await Self.render(
+            Color.white.shaderColorEffect(tint, isEnabled: true) { Color(red: 0, green: 0, blue: 1) },
+            settle: .milliseconds(600)
+        )
+        let red = try #require(Self.pixel(at: CGPoint(x: 60, y: 60), in: shaded))
+        #expect(red.red > 0.9 && red.blue < 0.15, "enabled, the tint should paint red, got \(red)")
+
+        let substituted = try await Self.render(
+            Color.white.shaderColorEffect(tint, isEnabled: false) { Color(red: 0, green: 0, blue: 1) },
+            settle: .milliseconds(250)
+        )
+        let blue = try #require(Self.pixel(at: CGPoint(x: 60, y: 60), in: substituted))
+        #expect(blue.blue > 0.9 && blue.red < 0.15, "disabled, the fallback should paint blue, got \(blue)")
+    }
+
     /// Shows `view` in a 120×120 window, gives it `settle` to draw, and takes its picture, as the probe
     /// does. If the picture is still blank at `landmark` (a point every view here paints), it waits a
     /// little longer, twice at most, so a slow first frame doesn't fail a test.
     private static func render(_ view: some View, settle: Duration, landmark: CGPoint = CGPoint(x: 30, y: 60)) async throws -> UIImage {
-        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 120, height: 120)
-        window.windowLevel = .alert + 1
-        window.rootViewController = UIHostingController(rootView: view.frame(width: 120, height: 120))
-        window.makeKeyAndVisible()
+        let window = try makeWindow(showing: view)
         try await Task.sleep(for: settle)
 
         var image = Self.snapshot(window)
@@ -166,6 +280,22 @@ struct ShaderTests {
         }
         window.isHidden = true
         return image
+    }
+
+    /// A 120×120 window showing `view` edge to edge. It sits clear of the status bar with the safe area
+    /// switched off: under the status bar, the hosting controller pushed the content about 30 pt down
+    /// into the safe area and clipped it, so the top rows read black (CI run 25). `pixel(at:in:)` reads
+    /// window-relative points, so where the window sits doesn't matter to the tests.
+    private static func makeWindow(showing view: some View) throws -> UIWindow {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 300, width: 120, height: 120)
+        window.windowLevel = .alert + 1
+        let host = UIHostingController(rootView: view.frame(width: 120, height: 120).ignoresSafeArea())
+        host.safeAreaRegions = []
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        return window
     }
 
     private static func snapshot(_ window: UIWindow) -> UIImage {

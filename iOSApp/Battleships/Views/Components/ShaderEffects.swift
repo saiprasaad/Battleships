@@ -8,6 +8,13 @@ import SwiftUI
 /// `wrapped(_:)`), so a `Float` keeps millisecond precision however long the app has been running;
 /// starts are folded with it (`wrapped(start:time:)`), so an age stays right across the fold.
 enum ShaderEffects {
+    /// Whether the shader library can be used: the hook `MotionPolicy.allowsShaders` reads, so that a
+    /// device whose `default.metallib` failed to load draws every caller's fallback instead. iOS 17 has
+    /// no API to ask whether `ShaderLibrary.default` loaded (a missing function only logs when it is
+    /// first drawn), so nothing clears it today: `ShaderWarmup` draws every shader once at launch, which
+    /// compiles their pipelines, and leaves it true.
+    @MainActor static private(set) var isAvailable = true
+
     /// Paints the view's opaque pixels in one colour.
     static func tint(_ color: Color) -> Shader {
         ShaderLibrary.default.probeTint(.color(color))
@@ -51,6 +58,50 @@ enum ShaderEffects {
             slots[1],
             slots[2],
             slots[3]
+        )
+    }
+
+    /// The iOS 17 backdrop (`oceanDrift`): three colour bands, `top` through `middle` to `bottom`,
+    /// blended by height, the middle one drifting slowly with `time` as the iOS 18 mesh's points do. The
+    /// shaded view's alpha is kept. `size` is the view's size in points.
+    static func oceanDrift(time: TimeInterval, size: CGSize, top: Color, middle: Color, bottom: Color) -> Shader {
+        ShaderLibrary.default.oceanDrift(
+            .float(Float(wrapped(time))),
+            .float2(size),
+            .color(top),
+            .color(middle),
+            .color(bottom)
+        )
+    }
+
+    /// The damage flash's red/cyan split (`chromaticSplit`), for `layerEffect` with a `maxSampleOffset`
+    /// that covers `offset`: red is sampled `offset` away and blue `offset` the other way, so edges fringe.
+    /// Zero leaves the layer unchanged.
+    static func chromaticSplit(offset: CGSize) -> Shader {
+        ShaderLibrary.default.chromaticSplit(.float2(offset))
+    }
+
+    /// Wind-blown rain (`rain`) over a clear rectangle: the shader emits `tint` at the streaks' coverage,
+    /// scaled by `density` (0 is none, and the input unchanged; 1 a downpour); `wind` leans the streaks
+    /// (points sideways for every point of fall; 0.3 is brisk). `size` is the rectangle's size in points.
+    static func rain(time: TimeInterval, size: CGSize, density: Double, wind: Double, tint: Color) -> Shader {
+        ShaderLibrary.default.rain(
+            .float(Float(wrapped(time))),
+            .float2(size),
+            .float(Float(min(max(density, 0), 1))),
+            .float(Float(wind)),
+            .color(tint)
+        )
+    }
+
+    /// Scan lines and a rim shade for a radar dish (`scanlines`): every other row darkened by half of
+    /// `opacity`, and the edges shaded by up to 0.45 × `opacity`; 0 leaves the input unchanged. The lines
+    /// hold still whatever `time` is.
+    static func scanlines(time: TimeInterval, size: CGSize, opacity: Double) -> Shader {
+        ShaderLibrary.default.scanlines(
+            .float(Float(wrapped(time))),
+            .float2(size),
+            .float(Float(min(max(opacity, 0), 1)))
         )
     }
 
@@ -142,5 +193,49 @@ struct WaterStain: Equatable, Sendable {
 
     fileprivate func argument(time: TimeInterval) -> Shader.Argument {
         .float4(Float(x), Float(y), Float(ShaderEffects.wrapped(start: start, time: time)), Float(strength))
+    }
+}
+
+/// Draws every shader once, invisibly, so their GPU pipelines are compiled before a battle needs them:
+/// a 1×1 white view under each effect, at opacity 0, hit testing and accessibility off. Place it once,
+/// at the root (`RootView`), as early as the app draws. It is also where `ShaderEffects.isAvailable`
+/// would be cleared if iOS 17 gave a way to know the library failed to load; it doesn't, so the
+/// warm-up leaves the flag true.
+struct ShaderWarmup: View {
+    private static let unit = CGSize(width: 1, height: 1)
+
+    var body: some View {
+        ZStack {
+            probe.colorEffect(ShaderEffects.tint(.white))
+            probe.colorEffect(ShaderEffects.water(time: 0, size: Self.unit, seaState: 0))
+            probe.distortionEffect(ShaderEffects.ripples(time: 0, size: Self.unit, cell: 1, impacts: []), maxSampleOffset: .zero)
+            probe.colorEffect(ShaderEffects.stains(time: 0, cell: 1, stains: []))
+            probe.colorEffect(ShaderEffects.oceanDrift(time: 0, size: Self.unit, top: .white, middle: .white, bottom: .white))
+            probe.layerEffect(ShaderEffects.chromaticSplit(offset: .zero), maxSampleOffset: .zero)
+            probe.colorEffect(ShaderEffects.rain(time: 0, size: Self.unit, density: 1, wind: 0, tint: .white))
+            probe.colorEffect(ShaderEffects.scanlines(time: 0, size: Self.unit, opacity: 1))
+        }
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// The pixel each shader is drawn on.
+    private var probe: some View {
+        Color.white.frame(width: 1, height: 1)
+    }
+}
+
+extension View {
+    /// `colorEffect(shader)` when `isEnabled` (the caller's `policy.allowsShaders`, and whatever else
+    /// gates the effect), else `fallback` drawn over the content: the static stand-in for what the
+    /// shader would have added, so a device whose library failed to load still shows something.
+    @ViewBuilder
+    func shaderColorEffect<Fallback: View>(_ shader: Shader, isEnabled: Bool, @ViewBuilder fallback: () -> Fallback) -> some View {
+        if isEnabled {
+            colorEffect(shader)
+        } else {
+            overlay { fallback() }
+        }
     }
 }
