@@ -365,8 +365,9 @@ private struct ArmingHighlight: View {
     var body: some View {
         let color: Color = policy.allowsFlashes ? .white : Theme.reticle
         OneShot(trigger: isArmed, duration: FireBeat.armHighlight, curve: Easing.linear) { progress in
+            let opacity: Double = isArmed && progress < 1 ? 0.9 * (1 - progress) : 0
             Capsule()
-                .strokeBorder(color.opacity(isArmed && progress < 1 ? 0.9 * (1 - progress) : 0), lineWidth: 2)
+                .strokeBorder(color.opacity(opacity), lineWidth: 2)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)

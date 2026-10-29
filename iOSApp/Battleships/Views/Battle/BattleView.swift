@@ -52,6 +52,32 @@ struct BattleView: View {
     }
 
     var body: some View {
+        observedStage
+        .confirmationDialog("Resign this battle?", isPresented: $confirmsResign, titleVisibility: .visible) {
+            Button("Resign", role: .destructive) {
+                Task { await controller.resign() }
+            }
+        } message: {
+            Text(controller.isSolo ? "The computer takes the win." : "\(controller.opponentName) will be awarded the win.")
+        }
+        .sheet(isPresented: $showsAcceptSheet) {
+            acceptSheet
+        }
+        .sheet(isPresented: $showsFleet) {
+            FleetSheet(controller: controller)
+        }
+        .playerModeration($moderation) { _ in
+            // Blocking withdraws a challenge between the two players, which leaves nothing to show.
+            if case .unavailable = controller.phase {
+                dismiss()
+            }
+        }
+    }
+
+    /// The battlefield, its banner and the game-over card, with the navigation chrome. The observers,
+    /// the dialog and the sheets are separate declarations: as one chain, the body was more than
+    /// the type checker takes in reasonable time.
+    private var stage: some View {
         ZStack(alignment: .top) {
             // Still under a sheet: the glass over it is the only thing that moves (LOB-1).
             OceanBackdrop(isAnimated: !isCovered)
@@ -94,6 +120,10 @@ struct BattleView: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .toolbar { toolbarContent }
+    }
+
+    private var observedStage: some View {
+        stage
         .task { await controller.load() }
         .onChange(of: controller.perspective?.moves.count) { controller.syncMoves() }
         .onChange(of: controller.perspective?.outcome) { controller.syncMoves() }
@@ -144,25 +174,6 @@ struct BattleView: View {
             app.setAmbientScene(.battle(controller.mood))
         }
         .onDisappear { controller.viewDidDisappear() }
-        .confirmationDialog("Resign this battle?", isPresented: $confirmsResign, titleVisibility: .visible) {
-            Button("Resign", role: .destructive) {
-                Task { await controller.resign() }
-            }
-        } message: {
-            Text(controller.isSolo ? "The computer takes the win." : "\(controller.opponentName) will be awarded the win.")
-        }
-        .sheet(isPresented: $showsAcceptSheet) {
-            acceptSheet
-        }
-        .sheet(isPresented: $showsFleet) {
-            FleetSheet(controller: controller)
-        }
-        .playerModeration($moderation) { _ in
-            // Blocking withdraws a challenge between the two players, which leaves nothing to show.
-            if case .unavailable = controller.phase {
-                dismiss()
-            }
-        }
     }
 
     // MARK: Phases

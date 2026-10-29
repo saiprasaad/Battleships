@@ -420,11 +420,13 @@ private struct DotBurst: View {
 
     var body: some View {
         OneShot(trigger: trigger, duration: HUDBeat.burst) { progress in
+            let scale: CGFloat = 1 + 3.5 * CGFloat(progress)
+            let opacity: Double = progress < 1 ? 0.9 * (1 - progress) : 0
             Circle()
                 .stroke(color, lineWidth: 1.5)
                 .frame(width: 8, height: 8)
-                .scaleEffect(1 + 3.5 * progress)
-                .opacity(progress < 1 ? 0.9 * (1 - progress) : 0)
+                .scaleEffect(scale)
+                .opacity(opacity)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -608,9 +610,10 @@ private struct RosterPip: View {
         if flashesOnHit {
             let flashes = policy.allowsFlashes
             OneShot(trigger: ship.hits, duration: HUDBeat.pipFlash, curve: Easing.linear) { progress in
+                let opacity: Double = flashes && progress < 1 ? 0.9 * abs(sin(2 * .pi * progress)) : 0
                 HullShape(kind: ship.kind)
                     .fill(Theme.amber)
-                    .opacity(flashes && progress < 1 ? 0.9 * abs(sin(2 * .pi * progress)) : 0)
+                    .opacity(opacity)
             }
             .allowsHitTesting(false)
         }
@@ -682,7 +685,8 @@ private struct PullFocus: ViewModifier {
     func body(content: Content) -> some View {
         let pulls = policy.tier == .full
         OneShot(trigger: trigger, duration: HUDBeat.pullFocus, curve: Easing.linear) { progress in
-            content.scaleEffect(pulls && progress < 1 ? 1 + 0.12 * sin(.pi * progress) : 1)
+            let scale: CGFloat = pulls && progress < 1 ? CGFloat(1 + 0.12 * sin(.pi * progress)) : 1
+            content.scaleEffect(scale)
         }
     }
 }

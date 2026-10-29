@@ -134,7 +134,13 @@ struct FlameMark: View {
 
     var body: some View {
         let flicker: Double = time.map { 0.5 + 0.5 * sin($0 * rhythm.speed * 2 * .pi + rhythm.phase) } ?? 0.5
-        let flare = policy.allowsFlashes ? min(1, max(0, self.flare)) : 0
+        let flare: Double = policy.allowsFlashes ? min(1, max(0, self.flare)) : 0
+        // Typed up front: arithmetic inside a modifier is what the type checker is slowest on.
+        let haloScale: CGFloat = CGFloat((0.92 + 0.16 * flicker) * (1 + 0.4 * flare)) * (showsHalo ? 1 : 0.7)
+        let emberSize: CGFloat = max(1, cell * 0.06 * scale)
+        let flameX: CGFloat = CGFloat(1.04 - 0.1 * flicker)
+        let flameY: CGFloat = CGFloat(0.94 + 0.14 * flicker)
+        let glow: CGFloat = cell * CGFloat(0.12 + 0.1 * flare) * scale
         ZStack {
             if showsHalo || flare > 0 {
                 Circle()
@@ -147,29 +153,34 @@ struct FlameMark: View {
                         )
                     )
                     .frame(width: cell, height: cell)
-                    .scaleEffect((0.92 + 0.16 * flicker) * (1 + 0.4 * flare) * (showsHalo ? 1 : 0.7))
+                    .scaleEffect(haloScale)
                     .opacity(showsHalo ? 1 : flare)
             }
             // Embers drifting up off the fire (BAT-5): three dots that rise and fade with the flicker.
             if let time, policy.allowsParticles {
                 ForEach(0..<3, id: \.self) { index in
-                    let phase = Motion.cycle(time + Double(index) * 0.37 + rhythm.phase, period: 1.1)
-                    Circle()
-                        .fill(index == 1 ? Theme.ember : Theme.flame)
-                        .frame(width: max(1, cell * 0.06 * scale), height: max(1, cell * 0.06 * scale))
-                        .offset(
-                            x: cell * scale * (0.12 * sin(phase * 2 * .pi + Double(index)) + (Double(index) - 1) * 0.1),
-                            y: -cell * scale * (0.1 + 0.42 * phase)
-                        )
-                        .opacity((1 - phase) * 0.9)
+                    ember(index: index, time: time, size: emberSize)
                 }
             }
             Image(systemName: "flame.fill")
                 .font(.system(size: cell * 0.52 * scale))
                 .foregroundStyle(LinearGradient(colors: [Theme.ember, Theme.flame, Theme.hit], startPoint: .top, endPoint: .bottom))
-                .scaleEffect(x: 1.04 - 0.1 * flicker, y: 0.94 + 0.14 * flicker, anchor: .bottom)
-                .shadow(color: Theme.flame.opacity(0.9), radius: cell * (0.12 + 0.1 * flare) * scale)
+                .scaleEffect(x: flameX, y: flameY, anchor: .bottom)
+                .shadow(color: Theme.flame.opacity(0.9), radius: glow)
         }
         .allowsHitTesting(false)
+    }
+
+    /// One ember, by its index: it sways as it rises and fades out over its cycle.
+    private func ember(index: Int, time: Double, size: CGFloat) -> some View {
+        let phase: Double = Motion.cycle(time + Double(index) * 0.37 + rhythm.phase, period: 1.1)
+        let sway: Double = 0.12 * sin(phase * 2 * .pi + Double(index)) + (Double(index) - 1) * 0.1
+        let x: CGFloat = cell * scale * CGFloat(sway)
+        let y: CGFloat = -cell * scale * CGFloat(0.1 + 0.42 * phase)
+        return Circle()
+            .fill(index == 1 ? Theme.ember : Theme.flame)
+            .frame(width: size, height: size)
+            .offset(x: x, y: y)
+            .opacity((1 - phase) * 0.9)
     }
 }

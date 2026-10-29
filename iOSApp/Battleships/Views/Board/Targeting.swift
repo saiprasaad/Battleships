@@ -50,9 +50,10 @@ struct ReticleView: View {
             if moves {
                 // One sonar ring out to 2.5 cells, and a scan line down the cell, on each new aim.
                 OneShot(trigger: target, duration: LockOnBeat.ring, playsOnAppear: true) { progress in
+                    let diameter: CGFloat = cell * CGFloat(0.3 + 2.2 * progress)
                     Circle()
                         .stroke(Theme.reticle.opacity(0.8 * (1 - progress)), lineWidth: max(1, cell * 0.04))
-                        .frame(width: cell * (0.3 + 2.2 * progress), height: cell * (0.3 + 2.2 * progress))
+                        .frame(width: diameter, height: diameter)
                 }
                 OneShot(trigger: target, duration: LockOnBeat.scan, playsOnAppear: true) { progress in
                     Rectangle()
