@@ -93,25 +93,9 @@ struct LobbyView: View {
 
                 if groups.isEmpty {
                     Section {
-                        Group {
-                            if isLoadingOnlineGames {
-                                SonarLoader(captions: ["Scanning the horizon…", "Hailing the fleet…"])
-                                    .padding(.vertical, 28)
-                                    .padding(.horizontal, 8)
-                                    .transition(.scale(scale: 0.8).combined(with: .opacity))
-                            } else {
-                                EmptySeaView(
-                                    title: "No Battles Yet",
-                                    message: "Start one against the computer, or challenge a friend online."
-                                ) {
-                                    Button("New Battle") { presentNewBattle(afterHandoff: false) }
-                                        .buttonStyle(SecondaryButtonStyle())
-                                }
-                                .transition(.opacity)
-                            }
-                        }
-                        .animation(Motion.Curve.phase.policy(policy), value: isLoadingOnlineGames)
-                        .listRowBackground(Color.clear)
+                        emptyState
+                            .animation(Motion.Curve.phase.policy(policy), value: isLoadingOnlineGames)
+                            .listRowBackground(Color.clear)
                     }
                 }
             }
@@ -229,6 +213,33 @@ struct LobbyView: View {
                 app.session.clearRatingDelta()
             }
         }
+    }
+
+    /// The empty list's one row: the sonar loader while the online games load, the empty sea after.
+    /// Three small views rather than one expression, which the type checker gave up on.
+    @ViewBuilder
+    private var emptyState: some View {
+        if isLoadingOnlineGames {
+            scanningLoader
+        } else {
+            emptySea
+        }
+    }
+
+    private var scanningLoader: some View {
+        SonarLoader(captions: ["Scanning the horizon…", "Hailing the fleet…"])
+            .padding(.vertical, 28)
+            .padding(.horizontal, 8)
+            .transition(.scale(scale: 0.8).combined(with: .opacity))
+    }
+
+    private var emptySea: some View {
+        let message = "Start one against the computer, or challenge a friend online."
+        return EmptySeaView(title: "No Battles Yet", message: message) {
+            Button("New Battle") { presentNewBattle(afterHandoff: false) }
+                .buttonStyle(SecondaryButtonStyle())
+        }
+        .transition(.opacity)
     }
 
     private var groups: [LobbyGroup] {
