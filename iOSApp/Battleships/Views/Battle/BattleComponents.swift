@@ -371,3 +371,60 @@ struct WaitingCard: View {
         return "Waiting for \(opponentName) to accept. We'll notify you when they do."
     }
 }
+
+/// The big red button. When `isArmed` it breathes, to say a target is locked in.
+struct FireButtonStyle: ButtonStyle {
+    var isArmed = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.headline.weight(.heavy))
+            .tracking(1.5)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 26)
+            .padding(.vertical, 15)
+            .background {
+                Capsule()
+                    .fill(Theme.fire)
+                    .overlay(
+                        Capsule()
+                            .fill(LinearGradient(colors: [.white.opacity(0.35), .clear], startPoint: .top, endPoint: .center))
+                            .padding(2)
+                    )
+            }
+            .overlay(Capsule().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+            .background {
+                if isArmed && isEnabled {
+                    ArmedHalo()
+                }
+            }
+            .shadow(color: Theme.hit.opacity(isEnabled ? 0.6 : 0), radius: 14, y: 4)
+            .scaleEffect(configuration.isPressed ? 0.93 : 1)
+            .saturation(isEnabled ? 1 : 0.2)
+            .opacity(isEnabled ? 1 : 0.45)
+            .animation(.spring(duration: 0.2), value: configuration.isPressed)
+    }
+}
+
+/// A ring pulsing out of the Fire button while a target is locked.
+private struct ArmedHalo: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let isStill = Motion.holdsStill(reduceMotion: reduceMotion)
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: isStill)) { timeline in
+            let progress = isStill ? 0.3 : Motion.cycle(timeline.date, period: 1.1)
+            ZStack {
+                Capsule()
+                    .stroke(Theme.flame, lineWidth: 2)
+                    .padding(-14 * Motion.easeOut(progress))
+                    .opacity(0.9 * (1 - progress))
+                Capsule()
+                    .fill(Theme.hit.opacity(0.45 - 0.3 * progress))
+                    .blur(radius: 12)
+                    .padding(-4 - 4 * progress)
+            }
+        }
+    }
+}
