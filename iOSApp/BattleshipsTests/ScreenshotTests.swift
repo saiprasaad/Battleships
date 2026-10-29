@@ -189,6 +189,8 @@ struct ScreenshotTests {
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(origin: .zero, size: scene.screen.bounds.size)
         window.overrideUserInterfaceStyle = .dark
+        // Above the app's own window, which has been seen on top of a strip in CI's video.
+        window.windowLevel = .alert + 1
         // A title card first, so the strip can be found in CI's video of the simulator.
         window.rootViewController = UIHostingController(rootView: FilmstripMarker(title: name, color: Color(red: 1, green: 0, blue: 1)))
         window.makeKeyAndVisible()
@@ -247,6 +249,7 @@ struct ScreenshotTests {
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(origin: .zero, size: size ?? scene.screen.bounds.size)
         window.overrideUserInterfaceStyle = style
+        window.windowLevel = .alert + 1
         let host = UIHostingController(rootView: AnyView(view))
         if regularWidth {
             host.traitOverrides.horizontalSizeClass = .regular
