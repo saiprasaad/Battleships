@@ -429,9 +429,11 @@ struct ResultBar: View {
         layout {
             summary
             if !isStacked {
-                Spacer(minLength: 8)
+                Spacer(minLength: 4)
             }
+            // The buttons keep their words whole; the result's lines give way (shrinking) first.
             buttons
+                .fixedSize(horizontal: !isStacked, vertical: false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -452,6 +454,8 @@ struct ResultBar: View {
             Text("\(Phrase.count(stats.hits, "hit")) from \(Phrase.count(stats.shotsFired, "shot"))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
     }
 

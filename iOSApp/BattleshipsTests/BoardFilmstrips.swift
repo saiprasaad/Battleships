@@ -38,9 +38,10 @@ extension ScreenshotTests {
             return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, { @MainActor in controller.tapTarget(last); Task { await controller.fire() } })
         }
 
-        // A battle that has just begun: BATTLE STATIONS, with the fleet sailing in from the first frame.
+        // A battle that has just begun: BATTLE STATIONS, with the fleet sailing in from the first frame,
+        // and the board live by 1.5 s: the strip runs on so the title's leaving is seen too.
         let fresh = try app.solo.start(mode: .classic, difficulty: .medium, fleet: Rules.classic.randomFleet())
-        try await filmstrip("battle-opening", to: output, seconds: 2.2, settle: 0) {
+        try await filmstrip("battle-opening", to: output, seconds: 4.0, settle: 0) {
             let controller = BattleController(route: .solo(fresh.id), app: app)
             return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, {})
         }

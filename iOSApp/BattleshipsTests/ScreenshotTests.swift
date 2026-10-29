@@ -195,10 +195,18 @@ struct ScreenshotTests {
             ShaderWarmup()
         })
         window.makeKeyAndVisible()
+        let began = Date()
         await ShaderEffects.warmUp()
+        let compiled = Date().timeIntervalSince(began)
         try await Task.sleep(for: .milliseconds(600))
         window.isHidden = true
         window.rootViewController = nil
+        // How long the compile took, for the timeline's readers (the strips' lines carry `start=`).
+        let output = URL(fileURLWithPath: try #require(Self.directory), isDirectory: true).appendingPathComponent("filmstrips", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let timeline = output.appendingPathComponent("timeline.txt")
+        let note = "stage warmup=\(compiled)s at=\(began.timeIntervalSince1970)\n"
+        try ((try? String(contentsOf: timeline, encoding: .utf8)) ?? "").appending(note).write(to: timeline, atomically: true, encoding: .utf8)
     }
 
     /// Shows `make()`'s view, waits `settle` seconds, runs its action and holds the view for `seconds`
@@ -232,11 +240,12 @@ struct ScreenshotTests {
         // A title card first, so the strip can be found in CI's video of the simulator.
         window.rootViewController = UIHostingController(rootView: FilmstripMarker(title: name, color: Color(red: 1, green: 0, blue: 1)))
         window.makeKeyAndVisible()
+        let card = Date()
         try await Task.sleep(for: .milliseconds(700))
-        // Name, length, when it started (Unix time, to line up with CI's video), and the app's
-        // state then (0 active, 1 inactive, 2 background).
+        // Name, length, when its card went up and when the view did (Unix time, to line up with
+        // CI's video), and the app's state then (0 active, 1 inactive, 2 background).
         let timeline = directory.appendingPathComponent("timeline.txt")
-        let entry = "\(name) \(seconds)s start=\(Date().timeIntervalSince1970) state=\(UIApplication.shared.applicationState.rawValue) scenes=\(UIApplication.shared.connectedScenes.count)\n"
+        let entry = "\(name) \(seconds)s card=\(card.timeIntervalSince1970) start=\(Date().timeIntervalSince1970) state=\(UIApplication.shared.applicationState.rawValue) scenes=\(UIApplication.shared.connectedScenes.count)\n"
         try ((try? String(contentsOf: timeline, encoding: .utf8)) ?? "").appending(entry).write(to: timeline, atomically: true, encoding: .utf8)
         let watchdog = MainThreadWatchdog()
         // The view appears as it does in the app: its own `onAppear` tells the controller.
