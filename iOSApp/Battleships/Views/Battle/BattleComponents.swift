@@ -29,6 +29,8 @@ private enum FireBeat {
 enum FireState: Equatable, Sendable {
     /// The enemy's turn.
     case standBy
+    /// The opening is playing (BATTLE STATIONS): the board goes live when it ends.
+    case opening
     /// The player's turn: pick a target.
     case aiming
     /// The player's shell is in the air.
@@ -40,7 +42,7 @@ enum FireState: Equatable, Sendable {
 
     var caption: String {
         switch self {
-        case .standBy: "STAND BY"
+        case .standBy, .opening: "STAND BY"
         case .aiming: "TARGET"
         case .firing: "FIRING"
         case .transmitting: "TRANSMITTING…"
@@ -137,14 +139,14 @@ struct FireBar: View {
     /// The readout shows a target on the player's turn and while their shell is in the air.
     private var shownTarget: Coordinate? {
         switch state {
-        case .standBy: nil
+        case .standBy, .opening: nil
         case .aiming, .firing, .transmitting, .misfire: target
         }
     }
 
     private var captionColor: Color {
         switch state {
-        case .standBy, .aiming: Color.secondary
+        case .standBy, .opening, .aiming: Color.secondary
         case .firing: Theme.flame
         case .transmitting: Theme.amber
         case .misfire: Theme.hit
@@ -154,7 +156,7 @@ struct FireBar: View {
     private var readoutColor: Color {
         guard shownTarget != nil else { return Color.white.opacity(0.25) }
         switch state {
-        case .standBy, .aiming: return Theme.reticle
+        case .standBy, .opening, .aiming: return Theme.reticle
         case .firing: return Theme.flame
         case .transmitting: return Theme.flame.opacity(0.6)
         case .misfire: return Theme.hit
@@ -168,6 +170,7 @@ struct FireBar: View {
     private var subtitle: String {
         switch state {
         case .standBy: "The enemy is taking their shot"
+        case .opening: "Taking up battle stations…"
         case .aiming: target == nil ? "Tap a square in enemy waters" : "Tap it again or press Fire"
         case .firing: "Shell away"
         case .transmitting: "Waiting for the server…"
@@ -177,7 +180,7 @@ struct FireBar: View {
 
     private var spokenReadout: String {
         switch state {
-        case .standBy: return "Stand by"
+        case .standBy, .opening: return "Stand by"
         case .aiming: return target.map { "Target \($0.notation)" } ?? "No target"
         case .firing: return target.map { "Firing at \($0.notation)" } ?? "Firing"
         case .transmitting: return "Transmitting"

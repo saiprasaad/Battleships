@@ -649,6 +649,7 @@ struct BattleView: View {
         if shells.contains(where: { $0.outcome == .misfire }) { return .misfire }
         if controller.isTransmitting { return .transmitting }
         if !shells.isEmpty { return .firing }
+        if controller.opening != nil { return .opening }
         return controller.isMyTurn ? .aiming : .standBy
     }
 

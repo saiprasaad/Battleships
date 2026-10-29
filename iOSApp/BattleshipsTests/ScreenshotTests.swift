@@ -103,9 +103,9 @@ struct ScreenshotTests {
         try await capture(LeaderboardView().environment(ranked.app), "14-leaderboard", to: output)
     }
 
-    /// Records the moments that move: a strip of frames over a few seconds, at about 12 frames a
-    /// second, at 1x so a strip stays small. CI uploads them under `filmstrips/<moment>/`, where
-    /// contact sheets of them show whether an animation reads well and lands on time.
+    /// Plays the moments that move for CI's recording of the simulator: each between a title card
+    /// and an end card, with its timing in `filmstrips/timeline.txt`, so the video can be cut into one
+    /// strip per moment and checked against the design spec.
     @Test(.enabled(if: directory != nil))
     func renderFilmstrips() async throws {
         let output = URL(fileURLWithPath: try #require(Self.directory), isDirectory: true).appendingPathComponent("filmstrips", isDirectory: true)
@@ -123,11 +123,14 @@ struct ScreenshotTests {
         let lastCruiserCells = cruiser.cells.filter { !known.contains($0) }
 
         try await filmstrip("battle-hit", to: output, seconds: 2.6) {
+            // The game as the showcase left it: a strip before leaves the computer's turn pending.
+            app.solo.update(classic)
             let controller = BattleController(route: .solo(showcase.classicBattle), app: app)
             controller.computerPause = 60_000...60_000
             return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, { controller.tapTarget(hitTarget); Task { await controller.fire() } })
         }
         try await filmstrip("battle-miss", to: output, seconds: 2.2) {
+            app.solo.update(classic)
             let controller = BattleController(route: .solo(showcase.classicBattle), app: app)
             controller.computerPause = 60_000...60_000
             return (AnyView(NavigationStack { BattleView(controller: controller) }.environment(app)), controller, { controller.tapTarget(water); Task { await controller.fire() } })
@@ -174,7 +177,38 @@ struct ScreenshotTests {
         }
     }
 
-    /// Shows `make()`'s view, waits `settle` seconds, runs its action, then saves frames for `seconds`.
+    /// Whether the stage has been warmed up in this process.
+    private static var isStagePrepared = false
+
+    /// Warms the stage once per process, as the app does at launch (`RootView`): every shader's
+    /// pipeline is compiled and the warm-up view drawn, so the first battle on screen doesn't stall
+    /// on compilation and the strips measure the app, not the first use of the GPU.
+    static func prepareStage() async throws {
+        guard !isStagePrepared else { return }
+        isStagePrepared = true
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: scene.screen.bounds.size)
+        window.windowLevel = .alert + 1
+        window.rootViewController = UIHostingController(rootView: ZStack {
+            Color.black.ignoresSafeArea()
+            ShaderWarmup()
+        })
+        window.makeKeyAndVisible()
+        await ShaderEffects.warmUp()
+        try await Task.sleep(for: .milliseconds(600))
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
+    /// Shows `make()`'s view, waits `settle` seconds, runs its action and holds the view for `seconds`
+    /// for CI's recording of the simulator, between a magenta title card and a green end card so the
+    /// strip can be found in the video. Nothing is snapshotted meanwhile: a snapshot of the window
+    /// takes the main thread for up to a second on CI's simulator, which would stall the very motion
+    /// being recorded. A watchdog notes every stall of the main thread instead, and the timeline
+    /// records the title card, the action and the end (Unix time) with the stalls relative to the
+    /// action, so the video is read knowing what the app was doing. One still of the final frame is
+    /// saved as `<name>/final.jpg` once the strip is over.
     /// Workstreams add their own strips as `@Test` methods in `extension ScreenshotTests` files.
     func filmstrip(
         _ name: String,
@@ -183,6 +217,7 @@ struct ScreenshotTests {
         settle: Double = 1.5,
         make: @MainActor () throws -> (view: AnyView, controller: BattleController?, action: @MainActor () -> Void)
     ) async throws {
+        try await Self.prepareStage()
         let folder = directory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // Daylight, whatever the simulator's clock says, so strips compare run to run.
@@ -203,36 +238,30 @@ struct ScreenshotTests {
         let timeline = directory.appendingPathComponent("timeline.txt")
         let entry = "\(name) \(seconds)s start=\(Date().timeIntervalSince1970) state=\(UIApplication.shared.applicationState.rawValue) scenes=\(UIApplication.shared.connectedScenes.count)\n"
         try ((try? String(contentsOf: timeline, encoding: .utf8)) ?? "").appending(entry).write(to: timeline, atomically: true, encoding: .utf8)
+        let watchdog = MainThreadWatchdog()
+        // The view appears as it does in the app: its own `onAppear` tells the controller.
         window.rootViewController = UIHostingController(rootView: view)
-        controller?.viewDidAppear()
         // A moment for the first frame to reach the screen, whether or not the view is left to settle.
         try await Task.sleep(for: .seconds(max(settle, 0.05)))
         if settle > 0, let controller {
             await controller.load()
         }
 
+        let actionDate = Date()
+        action()
+        try await Task.sleep(for: .seconds(seconds))
+        let stalls = watchdog.stop()
+        let after = "  \(name) action=\(actionDate.timeIntervalSince1970) end=\(Date().timeIntervalSince1970) state=\(UIApplication.shared.applicationState.rawValue) stalls=\(MainThreadWatchdog.describe(stalls, from: actionDate))\n"
+        try ((try? String(contentsOf: timeline, encoding: .utf8)) ?? "").appending(after).write(to: timeline, atomically: true, encoding: .utf8)
+        // The final frame as a still, at 1x; the video holds that frame while this draws.
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = true
-        let renderer = UIGraphicsImageRenderer(bounds: window.bounds, format: format)
-        let start = ContinuousClock.now
-        action()
-        var frame = 0
-        while ContinuousClock.now - start < .seconds(seconds) {
-            // Snapshot what is on screen right now. Waiting for screen updates instead would stall
-            // behind the looping animations, which always have an update pending.
-            let image = renderer.image { _ in
-                _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
-            }
-            let elapsed = (ContinuousClock.now - start) / .milliseconds(1)
-            try #require(image.jpegData(compressionQuality: 0.82))
-                .write(to: folder.appendingPathComponent(String(format: "%02d-%04dms.jpg", frame, Int(elapsed))))
-            frame += 1
-            try await Task.sleep(for: .milliseconds(80))
+        let still = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            _ = window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
         }
+        try #require(still.jpegData(compressionQuality: 0.82)).write(to: folder.appendingPathComponent("final.jpg"))
         controller?.viewDidDisappear()
-        let after = "  \(name) end=\(Date().timeIntervalSince1970) state=\(UIApplication.shared.applicationState.rawValue)\n"
-        try ((try? String(contentsOf: timeline, encoding: .utf8)) ?? "").appending(after).write(to: timeline, atomically: true, encoding: .utf8)
         // An end card, so the strip's last frame is unambiguous in the video.
         window.rootViewController = UIHostingController(rootView: FilmstripMarker(title: "end", color: Color(red: 0, green: 1, blue: 0)))
         try await Task.sleep(for: .milliseconds(400))
@@ -248,6 +277,7 @@ struct ScreenshotTests {
         size: CGSize? = nil,
         regularWidth: Bool = false
     ) async throws {
+        try await Self.prepareStage()
         DayCycle.fixedPalette = .day
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)

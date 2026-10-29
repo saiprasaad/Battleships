@@ -15,6 +15,24 @@ enum ShaderEffects {
     /// compiles their pipelines, and leaves it true.
     @MainActor static private(set) var isAvailable = true
 
+    /// Compiles every shader's pipeline ahead of its first draw, where iOS can (17.4 and later); before
+    /// that the `ShaderWarmup` view's probes do the same by drawing. The app calls it at launch
+    /// (`RootView`), the screenshot tests before their first strip. A shader that fails to compile is
+    /// left to its call site's fallback.
+    @MainActor
+    static func warmUp() async {
+        guard #available(iOS 17.4, *) else { return }
+        let unit = CGSize(width: 1, height: 1)
+        try? await tint(.white).compile(as: .colorEffect)
+        try? await water(time: 0, size: unit, seaState: 0).compile(as: .colorEffect)
+        try? await ripples(time: 0, size: unit, cell: 1, impacts: []).compile(as: .distortionEffect)
+        try? await stains(time: 0, cell: 1, stains: []).compile(as: .colorEffect)
+        try? await oceanDrift(time: 0, size: unit, top: .white, middle: .white, bottom: .white).compile(as: .colorEffect)
+        try? await chromaticSplit(offset: .zero).compile(as: .layerEffect)
+        try? await rain(time: 0, size: unit, density: 1, wind: 0, tint: .white).compile(as: .colorEffect)
+        try? await scanlines(time: 0, size: unit, opacity: 1).compile(as: .colorEffect)
+    }
+
     /// Paints the view's opaque pixels in one colour.
     static func tint(_ color: Color) -> Shader {
         ShaderLibrary.default.probeTint(.color(color))
@@ -196,11 +214,14 @@ struct WaterStain: Equatable, Sendable {
     }
 }
 
-/// Draws every shader once, invisibly, so their GPU pipelines are compiled before a battle needs them:
-/// a 1×1 white view under each effect, at opacity 0, hit testing and accessibility off. Place it once,
-/// at the root (`RootView`), as early as the app draws. It is also where `ShaderEffects.isAvailable`
-/// would be cleared if iOS 17 gave a way to know the library failed to load; it doesn't, so the
-/// warm-up leaves the flag true.
+/// Draws every shader once, all but invisibly, so their GPU pipelines are compiled before a battle
+/// needs them: a 1×1 white view under each effect at 1 % opacity (at 0 the drawing could be skipped,
+/// and nothing compiled), hit testing and accessibility off, with a 2×2 Canvas drawing a blurred,
+/// light-added layer the way the shells' and bursts' frames are drawn. Place it once, at the root
+/// (`RootView`), as early as the app draws, beside `ShaderEffects.warmUp()`, which compiles the same
+/// shaders ahead of time where iOS can. It is also where `ShaderEffects.isAvailable` would be
+/// cleared if iOS 17 gave a way to know the library failed to load; it doesn't, so the warm-up
+/// leaves the flag true.
 struct ShaderWarmup: View {
     private static let unit = CGSize(width: 1, height: 1)
 
@@ -214,10 +235,27 @@ struct ShaderWarmup: View {
             probe.layerEffect(ShaderEffects.chromaticSplit(offset: .zero), maxSampleOffset: .zero)
             probe.colorEffect(ShaderEffects.rain(time: 0, size: Self.unit, density: 1, wind: 0, tint: .white))
             probe.colorEffect(ShaderEffects.scanlines(time: 0, size: Self.unit, opacity: 1))
+            canvasProbe
         }
-        .opacity(0)
+        .opacity(0.01)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// The effects' drawing, as `ShellFlightLayer` and `EffectsLayer` draw it: a layer with a blur
+    /// filter, added as light, filled and stroked with a gradient.
+    private var canvasProbe: some View {
+        Canvas { context, size in
+            let path = Path(ellipseIn: CGRect(origin: .zero, size: size))
+            let gradient = Gradient(colors: [.white, .clear])
+            context.drawLayer { layer in
+                layer.addFilter(.blur(radius: 1))
+                layer.blendMode = .plusLighter
+                layer.fill(path, with: .color(.white))
+                layer.stroke(path, with: .linearGradient(gradient, startPoint: .zero, endPoint: CGPoint(x: size.width, y: size.height)), lineWidth: 1)
+            }
+        }
+        .frame(width: 2, height: 2)
     }
 
     /// The pixel each shader is drawn on.

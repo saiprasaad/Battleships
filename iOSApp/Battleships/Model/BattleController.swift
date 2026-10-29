@@ -1011,6 +1011,11 @@ final class BattleController {
     /// of the history, so opening a game doesn't replay every shot; in an online game it replays the
     /// opponent's shots made since the game was last on screen.
     func syncMoves() {
+        // Noted before there is a board to look at (there is none while matchmaking), so that when
+        // an opponent is found the opening leads with the Match Found card.
+        if onlineGame?.summary.status == .matchmaking {
+            wasMatchmaking = true
+        }
         guard let perspective else { return }
         let moves = perspective.moves
         let isFirstLook = seenMoveCount == nil
@@ -1056,9 +1061,6 @@ final class BattleController {
             }
         }
 
-        if onlineGame?.summary.status == .matchmaking {
-            wasMatchmaking = true
-        }
         if !incoming.isEmpty, opening != nil {
             // A shot arriving during the opening ends it.
             skipOpening()

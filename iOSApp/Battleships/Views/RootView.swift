@@ -31,8 +31,10 @@ struct RootView: View {
                     .tabItem { Label("Profile", systemImage: "person.crop.circle") }
                     .tag(Tab.profile)
             }
-            // Every shader is drawn once, invisibly, so its pipeline is warm before a battle needs it.
+            // Every shader is compiled, and drawn once all but invisibly, so its pipeline is warm
+            // before a battle needs it.
             .background { ShaderWarmup() }
+            .task { await ShaderEffects.warmUp() }
             // Toasts float over every tab; sheets host their own, as they present above this overlay.
             .toastHost()
             .overlay(alignment: .topTrailing) {

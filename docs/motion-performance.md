@@ -104,6 +104,19 @@ wait, and a thermal state never above fair in a twenty-minute session. Record th
 
 The iOS job records the simulator while the tests run and uploads `motion-video` beside the
 `screenshots` artifact. The filmstrip tests play each sequence between a magenta title card and a
-green end card, so the video can be cut into strips per sequence. The tools under
-`iOSApp/BattleshipsTests` describe each strip's timeline; the acceptance criteria for each
-sequence are in the design spec.
+green end card, so the video can be cut into strips per sequence. The tests snapshot nothing while a
+sequence plays: a snapshot of the window takes the main thread for up to a second on the simulator,
+which would stall the very motion being recorded. Instead `filmstrips/timeline.txt` in the
+`screenshots` artifact gives, for every strip, the Unix time of its title card, its action and its
+end, and every stall of the main thread a watchdog saw while it played, relative to the action:
+
+```
+battle-hit 2.6s start=1793291061.53 state=0 scenes=1
+  battle-hit action=1793291063.78 end=1793291066.39 state=0 stalls=+0.02s:0.14s
+```
+
+`build/recording-start.txt` in the video artifact says when the recording began, so a strip's
+frames can be lined up with its timeline to within a frame. A stall over 100 ms while a shot
+lands is worth a look; a stall during a strip's first frames is the screen being built. One still of
+each strip's final frame is saved as `filmstrips/<strip>/final.jpg`. The acceptance criteria for
+each sequence are in the design spec.
