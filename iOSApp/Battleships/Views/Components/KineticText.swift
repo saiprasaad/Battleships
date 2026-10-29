@@ -39,9 +39,10 @@ struct KineticHeadline: View {
     @Environment(\.layoutDirection) private var layoutDirection
 
     /// Below this width the word is one `Text` that can wrap and shrink.
-    static let minimumWidth: CGFloat = 300
+    nonisolated static let minimumWidth: CGFloat = 300
     /// Each letter's own move takes this long, in word time, before the next starts after `Timing.Stagger.letter`.
-    static let letterDuration: TimeInterval = 0.25
+    /// Nonisolated so a plain struct can use it as a default value (`HeadlineRun` in the HUD).
+    nonisolated static let letterDuration: TimeInterval = 0.25
 
     var body: some View {
         Group {

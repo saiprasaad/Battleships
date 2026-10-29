@@ -67,7 +67,7 @@ struct StreakChip: View {
 /// water, with a finger that bounces a few times. It fades on the first aim and is never shown
 /// again (BAT-15). No letterbox, no spotlight, no demo.
 struct CoachMark: View {
-    static let defaultText = "Tap a square to aim. Tap it again, or press Fire."
+    nonisolated static let defaultText = "Tap a square to aim. Tap it again, or press Fire."
 
     var text = CoachMark.defaultText
     @Environment(\.motionPolicy) private var policy

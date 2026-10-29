@@ -15,7 +15,8 @@ import SwiftUI
 struct WaterView: View, Animatable {
     let geometry: BoardGeometry
     /// How rough the water is, from 0 (calm) to 1. Animate changes from the caller with `.animation(_:value:)`.
-    var seaState: Double = 0.2
+    /// Nonisolated, like `animatableData`, because `Animatable` is not a main-actor protocol.
+    nonisolated var seaState: Double = 0.2
     /// Live ripples; the four newest play.
     var impacts: [WaterImpact] = []
     /// Burning ships (darkening) and splashes (foam). Oil comes first, then the newest foam, four in all.
@@ -27,7 +28,7 @@ struct WaterView: View, Animatable {
     /// The swell's phase in a still frame.
     private static let stillSeconds: TimeInterval = 12.5
 
-    var animatableData: Double {
+    nonisolated var animatableData: Double {
         get { seaState }
         set { seaState = newValue }
     }
