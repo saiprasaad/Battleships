@@ -1,8 +1,11 @@
 import CoreHaptics
+import UIKit
 
 /// Plays each event's ``HapticScore`` on Core Haptics, so a hit thuds and rumbles rather than just
 /// clicks. Where Core Haptics isn't available (iPad, the simulator) or fails, the UIKit generators
-/// in ``Haptics`` say what happened instead.
+/// in ``Haptics`` say what happened instead. Scores are shaped by the play's `FeedbackVariation`,
+/// scaled by the Haptic Strength setting, capped under Reduce Motion, and scheduled on the
+/// engine's own clock when the play carries a delay, so a landing meets its frame.
 @MainActor
 final class HapticEngine: FeedbackPlayer {
     private let isEnabled: @MainActor () -> Bool
@@ -10,44 +13,73 @@ final class HapticEngine: FeedbackPlayer {
     private let fallback: Haptics
     private let supportsHaptics: Bool
     private var engine: CHHapticEngine?
-    /// The engine has stopped (idle, interrupted, or reset) and must be started before it plays.
+    /// The engine has stopped (rested, interrupted, or reset) and must be started before it plays.
     private var needsStart = true
-    /// Patterns already built, at the strength they were built for.
-    private var patterns: [FeedbackEvent: CHHapticPattern] = [:]
-    private var patternStrength = -1.0
+    /// Patterns already built, keyed by the event and everything that shaped them.
+    private var patterns: [PatternKey: CHHapticPattern] = [:]
 
-    init(isEnabled: @escaping @MainActor () -> Bool, strength: @escaping @MainActor () -> Double) {
+    /// What tells one built pattern from another: the event, the variation's shape, the level
+    /// (intensity × strength, in 32 steps) and the Reduce Motion cap.
+    private struct PatternKey: Hashable {
+        let event: FeedbackEvent
+        let isMine: Bool
+        let isFinal: Bool
+        let count: Int
+        let level: Int
+        let reducesMotion: Bool
+    }
+
+    init(fallback: Haptics, isEnabled: @escaping @MainActor () -> Bool, strength: @escaping @MainActor () -> Double) {
+        self.fallback = fallback
         self.isEnabled = isEnabled
         self.strength = strength
-        fallback = Haptics(isEnabled: isEnabled)
         supportsHaptics = CHHapticEngine.capabilitiesForHardware().supportsHaptics
     }
 
     func play(_ event: FeedbackEvent) {
+        play(event, variation: .default)
+    }
+
+    func play(_ event: FeedbackEvent, variation: FeedbackVariation) {
         guard isEnabled() else { return }
-        let level = min(1, max(0, strength()))
+        let level = min(1, max(0, strength() * variation.intensity))
         guard level > 0 else { return }
         guard supportsHaptics else {
-            playFallback(event, strength: level)
+            playFallback(event, variation: variation, level: level)
             return
         }
-        guard let score = HapticScore.score(for: event) else { return }
+        guard HapticScore.score(for: event, variation: variation) != nil else { return }
         do {
             let engine = try runningEngine()
-            let pattern = try makePattern(for: event, score: score, strength: level)
+            let pattern = try makePattern(for: event, variation: variation, level: level)
             let player = try engine.makePlayer(with: pattern)
-            try player.start(atTime: CHHapticTimeImmediate)
+            let start: TimeInterval = variation.delay > 0 ? engine.currentTime + variation.delay : CHHapticTimeImmediate
+            try player.start(atTime: start)
         } catch {
             // Core Haptics is a luxury: the generators still say what happened.
             needsStart = true
-            playFallback(event, strength: level)
+            playFallback(event, variation: variation, level: level)
         }
     }
 
-    private func playFallback(_ event: FeedbackEvent, strength: Double) {
+    /// Starts the engine early, so the first cue of a battle or placement has no latency.
+    func prepare() {
+        fallback.prepare()
+        guard supportsHaptics, isEnabled() else { return }
+        _ = try? runningEngine()
+    }
+
+    /// Stops the engine: the screen is gone, or the app is in the background.
+    func rest() {
+        guard let engine else { return }
+        needsStart = true
+        engine.stop(completionHandler: nil)
+    }
+
+    private func playFallback(_ event: FeedbackEvent, variation: FeedbackVariation, level: Double) {
         // Turned down, the smallest ticks go first; the generators can't play them any softer.
-        if strength < 0.5, event == .tick || event == .select { return }
-        fallback.play(event)
+        if level < 0.5, event == .tick || event == .select || event == .navigate { return }
+        fallback.play(event, variation: variation)
     }
 
     /// The engine, created on first use and started whenever it has stopped since.
@@ -57,7 +89,7 @@ final class HapticEngine: FeedbackPlayer {
             engine = existing
         } else {
             engine = try CHHapticEngine()
-            engine.isAutoShutdownEnabled = true
+            engine.isAutoShutdownEnabled = false
             engine.playsHapticsOnly = true
             engine.resetHandler = { @Sendable [weak self] in
                 Task { @MainActor in self?.engineDidReset() }
@@ -75,27 +107,40 @@ final class HapticEngine: FeedbackPlayer {
         return engine
     }
 
-    /// The system reset the haptic server: this engine and every player made from it are gone,
-    /// so the next play makes a new one.
+    /// The system reset the haptic server: this engine, its players and its patterns are gone,
+    /// so the next play makes new ones.
     private func engineDidReset() {
         engine = nil
+        patterns = [:]
         needsStart = true
     }
 
-    /// The engine stopped (idle shutdown, an interruption, the app suspended): start it next time.
+    /// The engine stopped (rested, an interruption, the app suspended): start it next time.
     private func engineDidStop() {
         needsStart = true
     }
 
-    private func makePattern(for event: FeedbackEvent, score: HapticScore, strength: Double) throws -> CHHapticPattern {
-        if strength != patternStrength {
-            patterns = [:]
-            patternStrength = strength
-        }
-        if let pattern = patterns[event] {
+    private func makePattern(for event: FeedbackEvent, variation: FeedbackVariation, level: Double) throws -> CHHapticPattern {
+        let reducesMotion = UIAccessibility.isReduceMotionEnabled
+        let key = PatternKey(
+            event: event,
+            isMine: variation.isMine,
+            isFinal: variation.isFinal,
+            count: min(max(variation.count, 0), 20),
+            level: Int((level * 32).rounded()),
+            reducesMotion: reducesMotion
+        )
+        if let pattern = patterns[key] {
             return pattern
         }
-        let events = score.scaled(by: strength).events.map { cue -> CHHapticEvent in
+        // The variation shapes the score, the strength setting scales it, Reduce Motion caps it,
+        // and rendering turns its ramps into short flat steps: one pattern, no parameter curves.
+        var score = HapticScore.score(for: event, variation: variation) ?? HapticScore(events: [])
+        score = score.scaled(by: min(1, max(0, strength())))
+        if reducesMotion {
+            score = score.reduceMotionCapped(maxIntensity: event == .whistle ? 0.35 : 0.7)
+        }
+        let events = score.rendered().events.map { cue -> CHHapticEvent in
             let parameters = [
                 CHHapticEventParameter(parameterID: .hapticIntensity, value: Float(cue.intensity)),
                 CHHapticEventParameter(parameterID: .hapticSharpness, value: Float(cue.sharpness)),
@@ -113,7 +158,10 @@ final class HapticEngine: FeedbackPlayer {
             }
         }
         let pattern = try CHHapticPattern(events: events, parameters: [])
-        patterns[event] = pattern
+        if patterns.count > 64 {
+            patterns = [:]
+        }
+        patterns[key] = pattern
         return pattern
     }
 }

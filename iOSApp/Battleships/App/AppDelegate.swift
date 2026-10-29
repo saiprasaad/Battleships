@@ -9,8 +9,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     private(set) lazy var model: AppModel = {
         let settings = AppSettings()
         let feedback = CombinedFeedback([
-            HapticEngine(isEnabled: { settings.hapticsEnabled }, strength: { settings.hapticStrength }),
-            SoundEffects(isEnabled: { settings.soundEnabled }),
+            HapticEngine(
+                fallback: Haptics(isEnabled: { settings.hapticsEnabled }),
+                isEnabled: { settings.hapticsEnabled },
+                strength: { settings.hapticStrength }
+            ),
+            SoundEffects(isEnabled: { settings.soundEnabled }, ambientEnabled: { settings.ambientSoundEnabled }),
         ])
         return AppModel(settings: settings, tokenStorage: KeychainTokenStorage(), feedback: feedback)
     }()

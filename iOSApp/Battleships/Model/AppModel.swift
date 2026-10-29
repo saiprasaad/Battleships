@@ -144,7 +144,15 @@ final class AppModel {
 
     // MARK: App lifecycle
 
+    /// Whether the app is in the foreground: the bed and the engines run only then.
+    @ObservationIgnored private var isActive = false
+    /// The ambient scene the screen on top asked for, kept so it comes back after the background
+    /// or a change of the sound settings. The lobby's sea until a screen says otherwise.
+    @ObservationIgnored private(set) var ambientScene: AmbientScene = .lobby
+
     func appDidBecomeActive() {
+        isActive = true
+        feedback.prepare()
         ambienceSettingDidChange()
         Task {
             await session.revokePendingSessions()
@@ -162,14 +170,29 @@ final class AppModel {
     }
 
     func appDidEnterBackground() {
-        feedback.setAmbience(false)
+        isActive = false
+        feedback.setAmbientScene(.none)
+        feedback.rest()
         online.disconnect()
+    }
+
+    /// The screen on top says where the player is, so the sea under it follows: screens call it
+    /// in `onAppear` and when the battle's mood changes. Played when the app is active and the
+    /// Ambient Sound and Sound Effects settings allow it; remembered otherwise.
+    func setAmbientScene(_ scene: AmbientScene) {
+        ambientScene = scene
+        applyAmbientScene()
     }
 
     /// Starts or stops the ambient bed as the Ambient Sound and Sound Effects settings say. The
     /// Settings screen calls it when either toggle changes; the app does when it becomes active.
     func ambienceSettingDidChange() {
-        feedback.setAmbience(settings.ambientSoundEnabled && settings.soundEnabled)
+        applyAmbientScene()
+    }
+
+    private func applyAmbientScene() {
+        let isOn = isActive && settings.ambientSoundEnabled && settings.soundEnabled
+        feedback.setAmbientScene(isOn ? ambientScene : .none)
     }
 
     // MARK: Push notifications

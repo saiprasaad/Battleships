@@ -3,13 +3,56 @@ import BattleshipCore
 import Foundation
 @testable import Battleships
 
-/// Records feedback instead of playing haptics.
+/// Records feedback instead of playing haptics: every play with its variation, the engine
+/// prepare/rest calls, loops and ambient scenes.
 @MainActor
 final class FeedbackRecorder: FeedbackPlayer {
+    struct Play: Equatable, Sendable {
+        let event: FeedbackEvent
+        let variation: FeedbackVariation
+    }
+
+    struct LoopChange: Equatable, Sendable {
+        let event: FeedbackEvent
+        let isOn: Bool
+    }
+
+    /// Every event played, in order (the variation is in `plays`).
     private(set) var events: [FeedbackEvent] = []
+    private(set) var plays: [Play] = []
+    private(set) var loops: [LoopChange] = []
+    private(set) var scenes: [AmbientScene] = []
+    private(set) var prepareCount = 0
+    private(set) var restCount = 0
 
     func play(_ event: FeedbackEvent) {
+        play(event, variation: .default)
+    }
+
+    func play(_ event: FeedbackEvent, variation: FeedbackVariation) {
         events.append(event)
+        plays.append(Play(event: event, variation: variation))
+    }
+
+    func prepare() {
+        prepareCount += 1
+    }
+
+    func rest() {
+        restCount += 1
+    }
+
+    func setLoop(_ event: FeedbackEvent, isOn: Bool) {
+        loops.append(LoopChange(event: event, isOn: isOn))
+    }
+
+    func setAmbientScene(_ scene: AmbientScene) {
+        scenes.append(scene)
+    }
+
+    /// The variation of the last play of `event`, if it was played.
+    func variation(of event: FeedbackEvent) -> FeedbackVariation? {
+        plays.last { $0.event == event }?.variation
     }
 }
 
