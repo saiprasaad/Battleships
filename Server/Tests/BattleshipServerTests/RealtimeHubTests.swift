@@ -58,8 +58,10 @@ final class RealtimeHubTests: ServerTestCase {
         let remaining = await hub.connectionCount(for: bobID)
         XCTAssertEqual(remaining, 0)
         // When Bob's phone reads again, it finds the connection gone. It has to read through what's
-        // already in its buffer first: Linux throws that away on a reset, but macOS delivers it.
-        try await stalled.channel.setOption(ChannelOptions.autoRead, value: true).get()
+        // already in its buffer first: Linux throws that away on a reset, but macOS delivers it. On
+        // Linux the reset can have closed the channel already, which is the very thing being checked,
+        // so a refusal to set the option on a closed channel is not a failure.
+        _ = try? await stalled.channel.setOption(ChannelOptions.autoRead, value: true).get()
         try await withTimeout(.seconds(10)) { try await stalled.channel.closeFuture.get() }
     }
 
