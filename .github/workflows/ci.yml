@@ -17,6 +17,8 @@ jobs:
     container: swift:6.3-noble
     steps:
       - uses: actions/checkout@v4
+      - name: Motion lint (iOS app)
+        run: bash iOSApp/Tools/lint_motion.sh
       - name: Cache SwiftPM builds
         uses: actions/cache@v4
         with:

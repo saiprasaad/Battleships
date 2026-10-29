@@ -237,6 +237,7 @@ The guides in `docs/` walk through it:
 
 - [docs/testflight.md](docs/testflight.md): sign and upload builds to TestFlight from GitHub Actions, no Mac needed.
 - [docs/sign-in.md](docs/sign-in.md): set up Sign in with Apple and Google.
+- [docs/motion-performance.md](docs/motion-performance.md): the motion tiers, the Effects settings, the testers' performance overlay and how to measure.
 - [docs/app-store.md](docs/app-store.md): everything App Store Connect asks for, ready to paste (listing, age rating, privacy answers, screenshots, review notes), and a pre-submission checklist. The **App Store screenshots** workflow renders the screenshots at the sizes Apple requires.
 
 In short:
