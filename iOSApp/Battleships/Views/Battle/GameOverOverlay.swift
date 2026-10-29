@@ -442,7 +442,7 @@ struct GameOverOverlay: View {
 
     private var subtitle: String {
         let opponentName = summary.opponentName
-        switch (summary.didWin, summary.reason) {
+        return switch (summary.didWin, summary.reason) {
         case (true, .resignation): "\(opponentName) struck their colours."
         case (true, .timeout): "\(opponentName) ran out of time to move."
         case (true, _): "You sent the enemy fleet to the bottom."
