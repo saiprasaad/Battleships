@@ -12,6 +12,14 @@ struct BoardView<Content: View>: View {
     var accent: Color?
     /// Washes some of the colour out of the water, while the board isn't in play.
     var isDimmed = false
+    /// How rough the water is, from 0 (calm) to 1. Animate changes at the call site with `.animation(_:value:)`.
+    var seaState: Double = 0.2
+    /// Ripples where shells have just landed, placed with `BoardGeometry.center(of:)` and timed on `Motion.seconds`.
+    var impacts: [WaterImpact] = []
+    /// Oil where ships burn and foam where shells splashed, placed and timed like `impacts`.
+    var stains: [WaterStain] = []
+    /// Off for one still frame of water, for miniatures.
+    var isWaterAnimated = true
     @ViewBuilder let content: (BoardGeometry) -> Content
 
     var body: some View {
@@ -19,6 +27,8 @@ struct BoardView<Content: View>: View {
             let side = min(proxy.size.width, proxy.size.height)
             let geometry = BoardGeometry(boardSize: rules.boardSize, side: side, showsLabels: showsLabels)
             ZStack(alignment: .topLeading) {
+                BoardShadow(geometry: geometry, accent: accent)
+                WaterView(geometry: geometry, seaState: seaState, impacts: impacts, stains: stains, isAnimated: isWaterAnimated)
                 SeaGrid(geometry: geometry, isDetailed: showsLabels, accent: accent, isDimmed: isDimmed)
                 if showsLabels {
                     BoardLabels(geometry: geometry, highlighted: highlighted)
@@ -31,7 +41,7 @@ struct BoardView<Content: View>: View {
     }
 }
 
-/// Deep water with a fine chart grid, a lit bezel and tactical corner marks.
+/// A fine chart grid, a lit bezel and tactical corner marks over the water, which `WaterView` draws below.
 struct SeaGrid: View {
     let geometry: BoardGeometry
     var isDetailed = true
@@ -52,30 +62,11 @@ struct SeaGrid: View {
         guard rect.width > 0 else { return }
         let water = Path(roundedRect: rect, cornerRadius: min(14, geometry.cell * 0.35), style: .continuous)
 
-        // Light falls from above, fading into the deep at the edges.
-        context.fill(
-            water,
-            with: .radialGradient(
-                Gradient(colors: [Theme.seaGlow, Theme.seaTop, Theme.seaBottom, Theme.abyss]),
-                center: CGPoint(x: rect.midX, y: rect.minY + rect.height * 0.3),
-                startRadius: 0,
-                endRadius: rect.height * 1.05
-            )
-        )
-        context.fill(
-            water,
-            with: .linearGradient(
-                Gradient(colors: [.white.opacity(0.09), .white.opacity(0)]),
-                startPoint: CGPoint(x: rect.minX, y: rect.minY),
-                endPoint: CGPoint(x: rect.midX, y: rect.midY)
-            )
-        )
+        // The water itself is WaterView, under this grid.
         if isDimmed {
-            // Drawn into the water once, rather than filtering the whole board (and every flame on
-            // it) each frame.
-            var wash = context
-            wash.blendMode = .saturation
-            wash.fill(water, with: .color(Color(white: 0.5).opacity(0.25)))
+            // A translucent wash over the water, drawn here once rather than filtering the whole board
+            // (and every flame on it) each frame.
+            context.fill(water, with: .color(Color(white: 0.5).opacity(0.25)))
         }
 
         // The chart grid, with a dot where lines cross.
@@ -136,6 +127,25 @@ struct SeaGrid: View {
             with: .color((accent ?? .white).opacity(accent == nil ? 0.3 : 0.85)),
             style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
         )
+    }
+}
+
+/// The board's drop shadow, and its lit edge when `accent` is set, cast by a solid shape under the
+/// water: the water redraws every frame, so it can't cast one cheaply.
+private struct BoardShadow: View {
+    let geometry: BoardGeometry
+    var accent: Color?
+
+    var body: some View {
+        let rect = geometry.gridRect
+        RoundedRectangle(cornerRadius: min(14, geometry.cell * 0.35), style: .continuous)
+            .fill(Theme.abyss)
+            .frame(width: rect.width, height: rect.height)
+            .shadow(color: (accent ?? .black).opacity(accent == nil ? 0.35 : 0.4), radius: accent == nil ? 10 : 16)
+            .offset(x: rect.minX, y: rect.minY)
+            .animation(.easeInOut(duration: 0.4), value: accent)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
