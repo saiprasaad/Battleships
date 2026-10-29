@@ -342,6 +342,42 @@ struct SettingsAndLayoutTests {
     }
 
     @MainActor
+    @Test func remembersHowManyMovesWereSeen() throws {
+        let defaults = try #require(UserDefaults(suiteName: "MovesTest-\(UUID().uuidString)"))
+        let settings = AppSettings(defaults: defaults)
+        let game = UUID()
+        #expect(settings.seenMoveCount(of: game) == nil)
+        settings.markMovesSeen(of: game, count: 7)
+        #expect(settings.seenMoveCount(of: game) == 7)
+        settings.markMovesSeen(of: game, count: 9)
+        #expect(AppSettings(defaults: defaults).seenMoveCount(of: game) == 9)
+        for _ in 0..<(AppSettings.seenMoveCountsKept + 20) {
+            settings.markMovesSeen(of: UUID(), count: 1)
+        }
+        let kept = (defaults.dictionary(forKey: "seenMoveCounts") as? [String: Int])?.count ?? 0
+        #expect(kept == AppSettings.seenMoveCountsKept, "the list is bounded")
+    }
+
+    @MainActor
+    @Test func keepsTheBestRatingAndTheSoloStreak() throws {
+        let defaults = try #require(UserDefaults(suiteName: "RatingTest-\(UUID().uuidString)"))
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.bestRating == nil)
+        #expect(!settings.noteRating(1000), "the first rating seen is the baseline, not a best")
+        #expect(settings.noteRating(1024))
+        #expect(!settings.noteRating(1010))
+        #expect(AppSettings(defaults: defaults).bestRating == 1024)
+        settings.soloWinStreak = 3
+        #expect(AppSettings(defaults: defaults).soloWinStreak == 3)
+        #expect(!settings.showsPerformanceOverlay)
+        #expect(!settings.hasSeenAimCoachMark)
+        let challenge = UUID()
+        #expect(!settings.hasSeenChallengeIntro(of: challenge))
+        settings.markChallengeIntroSeen(of: challenge)
+        #expect(AppSettings(defaults: defaults).hasSeenChallengeIntro(of: challenge))
+    }
+
+    @MainActor
     @Test func remembersTheWelcomeScreen() throws {
         let defaults = try #require(UserDefaults(suiteName: "WelcomeTest-\(UUID().uuidString)"))
         let settings = AppSettings(defaults: defaults)

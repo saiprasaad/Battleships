@@ -33,10 +33,18 @@ final class AppSettings {
         static let flashes = "flashesEnabled"
         static let hapticStrength = "hapticStrength"
         static let ambientSound = "ambientSoundEnabled"
+        static let performanceOverlay = "showsPerformanceOverlay"
+        static let seenAimCoachMark = "hasSeenAimCoachMark"
+        static let seenChallengeIntros = "seenChallengeIntros"
+        static let bestRating = "bestRating"
+        static let soloWinStreak = "soloWinStreak"
+        static let seenMoveCounts = "seenMoveCounts"
     }
 
     /// How many finished games are remembered as having had their result shown.
     static let seenOutcomesKept = 300
+    /// How many games' move counts are remembered, for the while-you-were-away replay.
+    static let seenMoveCountsKept = 200
 
     @ObservationIgnored private let defaults: UserDefaults
 
@@ -83,6 +91,26 @@ final class AppSettings {
         didSet { defaults.set(ambientSoundEnabled, forKey: Keys.ambientSound) }
     }
 
+    /// The frame-time and motion-budget overlay for TestFlight testers (tap the version five times).
+    var showsPerformanceOverlay: Bool {
+        didSet { defaults.set(showsPerformanceOverlay, forKey: Keys.performanceOverlay) }
+    }
+
+    /// Whether the first-battle "tap a square to aim" coach mark has been shown.
+    var hasSeenAimCoachMark: Bool {
+        didSet { defaults.set(hasSeenAimCoachMark, forKey: Keys.seenAimCoachMark) }
+    }
+
+    /// The highest online rating this player has reached on this device, for the PERSONAL BEST ribbon.
+    var bestRating: Int? {
+        didSet { defaults.set(bestRating, forKey: Keys.bestRating) }
+    }
+
+    /// Wins in a row against the computer, for the victory card's STREAK chip. Zero after a loss.
+    var soloWinStreak: Int {
+        didSet { defaults.set(soloWinStreak, forKey: Keys.soloWinStreak) }
+    }
+
     /// Whether the app has already asked for permission to send notifications.
     var hasAskedForNotifications: Bool {
         didSet { defaults.set(hasAskedForNotifications, forKey: Keys.askedForNotifications) }
@@ -106,6 +134,10 @@ final class AppSettings {
         flashesEnabled = defaults.object(forKey: Keys.flashes) as? Bool ?? true
         hapticStrength = min(max(defaults.object(forKey: Keys.hapticStrength) as? Double ?? 1, 0), 1)
         ambientSoundEnabled = defaults.object(forKey: Keys.ambientSound) as? Bool ?? true
+        showsPerformanceOverlay = defaults.bool(forKey: Keys.performanceOverlay)
+        hasSeenAimCoachMark = defaults.bool(forKey: Keys.seenAimCoachMark)
+        bestRating = defaults.object(forKey: Keys.bestRating) as? Int
+        soloWinStreak = max(0, defaults.integer(forKey: Keys.soloWinStreak))
         hasAskedForNotifications = defaults.bool(forKey: Keys.askedForNotifications)
         hasSeenWelcome = defaults.bool(forKey: Keys.seenWelcome)
     }
@@ -122,6 +154,53 @@ final class AppSettings {
         guard !seen.contains(gameID.uuidString) else { return }
         seen.append(gameID.uuidString)
         defaults.set(Array(seen.suffix(Self.seenOutcomesKept)), forKey: Keys.seenOutcomes)
+    }
+
+    /// Records an online rating; returns whether it is a new personal best.
+    @discardableResult
+    func noteRating(_ rating: Int) -> Bool {
+        guard let best = bestRating else {
+            bestRating = rating
+            return false
+        }
+        guard rating > best else { return false }
+        bestRating = rating
+        return true
+    }
+
+    // MARK: Moves the player has seen
+
+    /// How many moves of this game the player had seen the last time the battle was on screen, so
+    /// opening it again can replay the opponent's shots since. `nil` for a game never shown.
+    func seenMoveCount(of gameID: UUID) -> Int? {
+        (defaults.dictionary(forKey: Keys.seenMoveCounts) as? [String: Int])?[gameID.uuidString]
+    }
+
+    func markMovesSeen(of gameID: UUID, count: Int) {
+        var counts = defaults.dictionary(forKey: Keys.seenMoveCounts) as? [String: Int] ?? [:]
+        counts[gameID.uuidString] = count
+        if counts.count > Self.seenMoveCountsKept {
+            // Forget the games seen longest ago. Insertion order isn't kept, so the order of keys is
+            // used for want of better: these are all finished games by now.
+            for key in counts.keys.sorted().prefix(counts.count - Self.seenMoveCountsKept) {
+                counts.removeValue(forKey: key)
+            }
+        }
+        defaults.set(counts, forKey: Keys.seenMoveCounts)
+    }
+
+    // MARK: Challenges whose introduction was shown
+
+    /// Whether the incoming-transmission sequence has already played for this challenge.
+    func hasSeenChallengeIntro(of gameID: UUID) -> Bool {
+        defaults.stringArray(forKey: Keys.seenChallengeIntros)?.contains(gameID.uuidString) == true
+    }
+
+    func markChallengeIntroSeen(of gameID: UUID) {
+        var seen = defaults.stringArray(forKey: Keys.seenChallengeIntros) ?? []
+        guard !seen.contains(gameID.uuidString) else { return }
+        seen.append(gameID.uuidString)
+        defaults.set(Array(seen.suffix(Self.seenOutcomesKept)), forKey: Keys.seenChallengeIntros)
     }
 
     // MARK: Server addresses

@@ -132,12 +132,29 @@ final class SessionStore {
 
     // MARK: The session
 
+    /// The rating before the last refresh that changed it, so the screen can roll from one to the other.
+    private(set) var previousRating: Int?
+
     /// Re-fetches rating and record. Failures are ignored; the cached account stays on screen.
     func refreshAccount() async {
         guard let token, let account = try? await api.account(),
               self.token == token // still the same session once the answer arrives
         else { return }
+        if let before = self.account?.stats.rating, before != account.stats.rating {
+            previousRating = before
+        }
         remember(account)
+    }
+
+    /// The rating change a refresh brought, or nil if none is pending.
+    var ratingDelta: Int? {
+        guard let previousRating, let rating = account?.stats.rating else { return nil }
+        return rating - previousRating
+    }
+
+    /// Forgets the last rating change once the screen has shown it.
+    func clearRatingDelta() {
+        previousRating = nil
     }
 
     /// Ends the session on the server and forgets it locally. If the server can't be reached, the

@@ -51,6 +51,10 @@ struct NewGameDraft: Hashable, Sendable {
     var difficulty: Difficulty = .medium
     var mode: GameMode = .classic
     var friendUsername = ""
+    /// A rematch goes straight to deploying the fleet, with the opponent's name over the board.
+    var isRematch = false
+    /// Who the rematch is against, as shown over the deploy board: a username, or the computer's level.
+    var opponentDisplayName: String?
 
     var trimmedFriendUsername: String {
         friendUsername.trimmingCharacters(in: .whitespacesAndNewlines)
