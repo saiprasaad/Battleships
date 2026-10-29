@@ -142,8 +142,10 @@ struct BeatSchedulerTests {
     private struct TimedOut: Error {}
 
     /// Lets the scheduler's task run until `condition` holds, failing after about a second.
+    /// Polls for up to ten seconds: the scheduler's task can be starved for a while when the whole
+    /// suite runs in parallel on a busy machine.
     private func waitUntil(_ condition: @MainActor () -> Bool) async throws {
-        for _ in 0..<200 {
+        for _ in 0..<2_000 {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(5))
         }

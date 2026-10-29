@@ -2,39 +2,97 @@ import BattleshipCore
 import SwiftUI
 
 /// Arrange your fleet before a battle. The fleet starts in a random legal layout, so a player in a
-/// hurry can just press the button.
+/// hurry can just press the button. The ships drop anchor as the screen appears (DEP-1) and cast off
+/// when the fleet is confirmed (DEP-2), with the request running while they go.
 struct FleetPlacementView: View {
     let mode: GameMode
     let confirmTitle: String
-    let onConfirm: @MainActor ([ShipPlacement]) async -> Void
+    /// Who the fleet will face, shown as a "vs" chip above the board when known (a rematch, a challenge).
+    var opponentDisplayName: String? = nil
+    /// Runs the request while the ships cast off; see `init(mode:confirmTitle:opponentDisplayName:director:onDeploy:)`.
+    private let onDeploy: @MainActor ([ShipPlacement], DeployHandoff) async throws -> Void
+    /// Turns ships and confirms the fleet from outside the gestures (the filmstrips).
+    private let director: PlacementDirector?
 
     @Environment(AppModel.self) private var app
+    @Environment(\.motionPolicy) private var policy
     @State private var model: FleetPlacementModel
-    @State private var isSubmitting = false
     @State private var isDraggingShip = false
+    /// Bumped by the Shuffle button; the board does the shuffling.
+    @State private var shuffles = 0
+    /// Bumped by each confirmation, for the button's recoil.
+    @State private var deploys = 0
+    @State private var deploy = DeployPhase.idle
+    @AccessibilityFocusState private var focusesInstructions: Bool
 
-    init(mode: GameMode, confirmTitle: String, onConfirm: @escaping @MainActor ([ShipPlacement]) async -> Void) {
+    /// `onConfirm` runs the request and whatever navigation follows it. It is called once the ships
+    /// have cast off, since a hand-over it makes on its own can't wait for the departure; errors it
+    /// throws sail the ships back and show a toast.
+    init(
+        mode: GameMode,
+        confirmTitle: String,
+        opponentDisplayName: String? = nil,
+        director: PlacementDirector? = nil,
+        onConfirm: @escaping @MainActor ([ShipPlacement]) async throws -> Void
+    ) {
+        self.init(mode: mode, confirmTitle: confirmTitle, opponentDisplayName: opponentDisplayName, director: director) { fleet, handoff in
+            await handoff.departed()
+            try await onConfirm(fleet)
+        }
+    }
+
+    /// `onDeploy` runs the request while the ships cast off, and awaits `handoff.departed()` before
+    /// it navigates, so the next screen arrives when both the departure and the request are done.
+    /// Errors it throws sail the ships back and show a toast.
+    init(
+        mode: GameMode,
+        confirmTitle: String,
+        opponentDisplayName: String? = nil,
+        director: PlacementDirector? = nil,
+        onDeploy: @escaping @MainActor ([ShipPlacement], DeployHandoff) async throws -> Void
+    ) {
         self.mode = mode
         self.confirmTitle = confirmTitle
-        self.onConfirm = onConfirm
+        self.opponentDisplayName = opponentDisplayName
+        self.director = director
+        self.onDeploy = onDeploy
         _model = State(initialValue: FleetPlacementModel(rules: mode.rules))
     }
 
     var body: some View {
+        let isDeploying = deploy != .idle
         ZStack {
             OceanBackdrop()
             ScrollView {
                 VStack(spacing: 20) {
+                    if let opponentDisplayName {
+                        DeployOpponentChip(name: opponentDisplayName)
+                            // Stamps in once the fleet has dropped anchor.
+                            .dropsAnchor(index: Timing.Stagger.maxItems, trigger: 0, curve: Motion.Curve.slam)
+                    }
+
                     Label(instructions, systemImage: "hand.draw")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(Theme.secondaryText)
                         .multilineTextAlignment(.center)
+                        .opacity(isDeploying ? 0 : 1)
+                        .animation(Motion.Curve.fade.policy(policy), value: isDeploying)
+                        .accessibilityFocused($focusesInstructions)
 
-                    PlacementBoard(model: model, feedback: app.feedback, isDragging: $isDraggingShip)
-                        .frame(maxWidth: 520)
+                    PlacementBoard(
+                        model: model,
+                        feedback: app.feedback,
+                        isDragging: $isDraggingShip,
+                        shuffle: shuffles,
+                        deploy: deploy,
+                        director: director
+                    )
+                    .frame(maxWidth: 520)
 
                     FleetLegend(rules: mode.rules)
                         .frame(maxWidth: 520)
+                        .opacity(isDeploying ? 0 : 1)
+                        .animation(Motion.Curve.fade.policy(policy), value: isDeploying)
                 }
                 .padding()
                 .frame(maxWidth: .infinity)
@@ -52,6 +110,16 @@ struct FleetPlacementView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarBackground(Theme.abyss.opacity(0.4), for: .navigationBar)
         .toolbarColorScheme(.dark, for: .navigationBar)
+        .onAppear {
+            app.setAmbientScene(.placement)
+        }
+        .task {
+            // VoiceOver starts on the instructions once the fleet has dropped anchor (the lobby
+            // announces the rematch before pushing this screen).
+            try? await Task.sleep(for: .milliseconds(600))
+            focusesInstructions = true
+        }
+        .onChange(of: director?.deploys) { confirm() }
     }
 
     /// One-square boats look the same either way round, so they can't be turned.
@@ -62,30 +130,24 @@ struct FleetPlacementView: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 12) {
+        let isDeploying = deploy != .idle
+        return HStack(spacing: 12) {
             Button {
-                withAnimation(.spring(duration: 0.45, bounce: 0.25)) {
-                    model.shuffle()
-                }
-                app.feedback.play(.place)
+                shuffles += 1
             } label: {
                 Label("Shuffle", systemImage: "shuffle")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
-            .tint(.white)
+            .buttonStyle(SecondaryButtonStyle())
             .controlSize(.large)
+            .disabled(isDeploying)
 
             Button {
-                Task {
-                    isSubmitting = true
-                    await onConfirm(model.ships)
-                    isSubmitting = false
-                }
+                confirm()
             } label: {
                 Group {
-                    if isSubmitting {
-                        ProgressView()
+                    if isDeploying {
+                        Text("Deploying…")
                     } else {
                         Label(confirmTitle, systemImage: "flag.checkered")
                     }
@@ -96,13 +158,61 @@ struct FleetPlacementView: View {
             .primaryActionStyle()
             .tint(Theme.hit)
             .controlSize(.large)
-            .disabled(isSubmitting || !model.isValid)
+            .recoil(on: deploys, kick: 1.06)
+            .disabled(isDeploying || !model.isValid)
+            .accessibilityValue(isDeploying ? "Deploying fleet" : "")
         }
         .padding(14)
         .hudPanel(cornerRadius: 28)
         .padding(.horizontal)
         .padding(.bottom, 6)
         .frame(maxWidth: 560)
+    }
+
+    // MARK: Cast off
+
+    private func confirm() {
+        guard deploy == .idle, model.isValid else { return }
+        deploys += 1
+        app.feedback.play(.castOff)
+        let fleet = model.ships
+        let handoff = DeployHandoff()
+        let request = onDeploy
+        Task { @MainActor in
+            await castOff(fleet, handoff: handoff, request: request)
+        }
+    }
+
+    /// The lock, then the departure, with the request running alongside; then the hand-over, or the
+    /// ships' return with a toast.
+    private func castOff(
+        _ fleet: [ShipPlacement],
+        handoff: DeployHandoff,
+        request: @escaping @MainActor ([ShipPlacement], DeployHandoff) async throws -> Void
+    ) async {
+        async let outcome: Void = request(fleet, handoff)
+        deploy = .locking
+        try? await Task.sleep(for: .seconds(beat(Timing.deployCastOff)))
+        deploy = .departing
+        try? await Task.sleep(for: .seconds(beat(Timing.deployCastOff)))
+        handoff.open()
+        do {
+            try await outcome
+            AccessibilityNotification.Announcement("Fleet deployed. Starting battle.").post()
+        } catch {
+            app.feedback.play(.toastError)
+            ToastCenter.shared.show(.error, error.userMessage)
+        }
+        // Back to the berths: unseen once the next screen has taken over, and right when it hasn't.
+        deploy = .returning
+        try? await Task.sleep(for: .seconds(beat(Timing.deployCastOff * 2)))
+        deploy = .idle
+    }
+
+    /// A cast-off beat under the policy: as written at full speed, shorter in the reduced tier, and
+    /// `Timing.deployReduced` when sequences collapse (brackets fade in, ships fade out together).
+    private func beat(_ full: TimeInterval) -> TimeInterval {
+        policy.collapsesSequences || policy.holdsStill ? Timing.deployReduced : policy.duration(full)
     }
 }
 

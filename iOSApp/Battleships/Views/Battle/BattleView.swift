@@ -249,7 +249,7 @@ struct BattleView: View {
             }
             .frame(width: layout.side)
             BoardSection(title: "Your Fleet", detail: Phrase.count(perspective.enemyStats.hits, "hit") + " taken") {
-                HomeBoard(perspective: perspective, effects: controller.effects, isUnderFire: isUnderFire)
+                HomeBoard(perspective: perspective, controller: controller, isUnderFire: isUnderFire)
                     .shakes(on: controller.hitsTaken)
             }
             .frame(width: layout.side)
@@ -267,7 +267,7 @@ struct BattleView: View {
         ) {
             MiniMapButton(
                 perspective: perspective,
-                effects: controller.effects,
+                controller: controller,
                 isUnderFire: isUnderFire,
                 hitsTaken: controller.hitsTaken
             ) {
@@ -286,7 +286,7 @@ struct BattleView: View {
         TargetBoard(
             perspective: perspective,
             aimed: controller.aimed,
-            effects: controller.effects,
+            controller: controller,
             isInteractive: controller.isMyTurn,
             onTap: { controller.tapTarget($0) }
         )

@@ -221,7 +221,7 @@ private struct RosterPip: View {
 /// many ships are afloat from the fleet roster beside it, so the button doesn't repeat it.
 struct MiniMapButton: View {
     let perspective: BattlePerspective
-    let effects: [ImpactEffect]
+    let controller: BattleController
     let isUnderFire: Bool
     let hitsTaken: Int
     let action: @MainActor () -> Void
@@ -229,7 +229,7 @@ struct MiniMapButton: View {
     var body: some View {
         Button { action() } label: {
             VStack(spacing: 6) {
-                HomeBoard(perspective: perspective, effects: effects, isMiniature: true, isUnderFire: isUnderFire)
+                HomeBoard(perspective: perspective, controller: controller, isMiniature: true, isUnderFire: isUnderFire)
                     .frame(width: 106, height: 106)
                     .shakes(on: hitsTaken, amplitude: 4)
                 HStack(spacing: 4) {
@@ -262,7 +262,7 @@ struct FleetSheet: View {
                         VStack(spacing: 20) {
                             HomeBoard(
                                 perspective: perspective,
-                                effects: controller.effects,
+                                controller: controller,
                                 isUnderFire: controller.mood == .danger || controller.mood == .waiting
                             )
                             .shakes(on: controller.hitsTaken)

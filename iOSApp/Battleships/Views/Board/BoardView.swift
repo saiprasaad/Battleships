@@ -20,6 +20,8 @@ struct BoardView<Content: View>: View {
     var stains: [WaterStain] = []
     /// Off for one still frame of water, for miniatures.
     var isWaterAnimated = true
+    /// How much of the corner marks is drawn, 0…1: animate it up from 0 as a board enters.
+    var cornerMarksProgress: Double = 1
     @ViewBuilder let content: (BoardGeometry) -> Content
 
     var body: some View {
@@ -31,6 +33,15 @@ struct BoardView<Content: View>: View {
                 WaterView(geometry: geometry, seaState: seaState, impacts: impacts, stains: stains, isAnimated: isWaterAnimated)
                 SeaGrid(geometry: geometry, isDetailed: showsLabels, accent: accent, isDimmed: isDimmed)
                 if showsLabels {
+                    let grid = geometry.gridRect
+                    CornerMarks(progress: cornerMarksProgress, inset: 3, arm: min(12, geometry.cell * 0.3))
+                        .stroke(style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                        .foregroundStyle((accent ?? .white).opacity(accent == nil ? 0.3 : 0.85))
+                        .frame(width: grid.width, height: grid.height)
+                        .offset(x: grid.minX, y: grid.minY)
+                        .animation(.easeInOut(duration: 0.4), value: accent)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                     BoardLabels(geometry: geometry, highlighted: highlighted)
                 }
                 content(geometry)
@@ -41,7 +52,9 @@ struct BoardView<Content: View>: View {
     }
 }
 
-/// A fine chart grid, a lit bezel and tactical corner marks over the water, which `WaterView` draws below.
+/// A fine chart grid and a lit bezel over the water, which `WaterView` draws below; the corner marks
+/// are `CornerMarks`, above. While the board isn't in play the grid desaturates (animated at the call
+/// site's pace), rather than a wash being painted over the water.
 struct SeaGrid: View {
     let geometry: BoardGeometry
     var isDetailed = true
@@ -50,26 +63,21 @@ struct SeaGrid: View {
 
     var body: some View {
         Canvas { context, _ in
-            SeaGrid.draw(geometry: geometry, isDetailed: isDetailed, accent: accent, isDimmed: isDimmed, in: context)
+            SeaGrid.draw(geometry: geometry, isDetailed: isDetailed, accent: accent, in: context)
         }
+        .saturation(isDimmed ? 0.6 : 1)
         .shadow(color: (accent ?? .black).opacity(accent == nil ? 0.35 : 0.4), radius: accent == nil ? 10 : 16)
         .animation(.easeInOut(duration: 0.4), value: accent)
+        .animation(.easeInOut(duration: 0.4), value: isDimmed)
         .accessibilityHidden(true)
     }
 
-    private static func draw(geometry: BoardGeometry, isDetailed: Bool, accent: Color?, isDimmed: Bool, in context: GraphicsContext) {
+    private static func draw(geometry: BoardGeometry, isDetailed: Bool, accent: Color?, in context: GraphicsContext) {
         let rect = geometry.gridRect
         guard rect.width > 0 else { return }
         let water = Path(roundedRect: rect, cornerRadius: min(14, geometry.cell * 0.35), style: .continuous)
 
-        // The water itself is WaterView, under this grid.
-        if isDimmed {
-            // A translucent wash over the water, drawn here once rather than filtering the whole board
-            // (and every flame on it) each frame.
-            context.fill(water, with: .color(Color(white: 0.5).opacity(0.25)))
-        }
-
-        // The chart grid, with a dot where lines cross.
+        // The water itself is WaterView, under this grid. The chart grid, with a dot where lines cross.
         var lines = Path()
         for index in 1..<max(geometry.boardSize, 1) {
             let offset = CGFloat(index) * geometry.cell
@@ -103,30 +111,43 @@ struct SeaGrid: View {
             ),
             lineWidth: accent == nil ? 1 : 1.5
         )
+    }
+}
 
-        // Corner marks just outside the water, like a targeting display.
-        guard isDetailed else { return }
-        let inset: CGFloat = 3
-        let arm = min(12, geometry.cell * 0.3)
+/// Tactical corner marks just outside the water, like a targeting display: four L-shapes, each drawn
+/// from its corner outward along both arms as `progress` runs 0…1, so a board can draw them on as it
+/// enters. Give it the grid's frame; the marks sit `inset` points outside it.
+struct CornerMarks: Shape {
+    var progress: Double = 1
+    var inset: CGFloat = 3
+    /// The length of each arm.
+    var arm: CGFloat = 12
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let p = CGFloat(min(1, max(0, progress)))
+        var path = Path()
+        guard p > 0 else { return path }
         let outer = rect.insetBy(dx: -inset, dy: -inset)
-        var corners = Path()
-        corners.move(to: CGPoint(x: outer.minX, y: outer.minY + arm))
-        corners.addLine(to: CGPoint(x: outer.minX, y: outer.minY))
-        corners.addLine(to: CGPoint(x: outer.minX + arm, y: outer.minY))
-        corners.move(to: CGPoint(x: outer.maxX - arm, y: outer.minY))
-        corners.addLine(to: CGPoint(x: outer.maxX, y: outer.minY))
-        corners.addLine(to: CGPoint(x: outer.maxX, y: outer.minY + arm))
-        corners.move(to: CGPoint(x: outer.maxX, y: outer.maxY - arm))
-        corners.addLine(to: CGPoint(x: outer.maxX, y: outer.maxY))
-        corners.addLine(to: CGPoint(x: outer.maxX - arm, y: outer.maxY))
-        corners.move(to: CGPoint(x: outer.minX + arm, y: outer.maxY))
-        corners.addLine(to: CGPoint(x: outer.minX, y: outer.maxY))
-        corners.addLine(to: CGPoint(x: outer.minX, y: outer.maxY - arm))
-        context.stroke(
-            corners,
-            with: .color((accent ?? .white).opacity(accent == nil ? 0.3 : 0.85)),
-            style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
-        )
+        let corners: [(start: CGPoint, vertex: CGPoint, end: CGPoint)] = [
+            (CGPoint(x: outer.minX, y: outer.minY + arm), CGPoint(x: outer.minX, y: outer.minY), CGPoint(x: outer.minX + arm, y: outer.minY)),
+            (CGPoint(x: outer.maxX - arm, y: outer.minY), CGPoint(x: outer.maxX, y: outer.minY), CGPoint(x: outer.maxX, y: outer.minY + arm)),
+            (CGPoint(x: outer.maxX, y: outer.maxY - arm), CGPoint(x: outer.maxX, y: outer.maxY), CGPoint(x: outer.maxX - arm, y: outer.maxY)),
+            (CGPoint(x: outer.minX + arm, y: outer.maxY), CGPoint(x: outer.minX, y: outer.maxY), CGPoint(x: outer.minX, y: outer.maxY - arm)),
+        ]
+        for corner in corners {
+            var mark = Path()
+            mark.move(to: corner.start)
+            mark.addLine(to: corner.vertex)
+            mark.addLine(to: corner.end)
+            // Both arms are the same length, so trimming about the middle grows them from the vertex.
+            path.addPath(p >= 1 ? mark : mark.trimmedPath(from: 0.5 - p / 2, to: 0.5 + p / 2))
+        }
+        return path
     }
 }
 
@@ -149,23 +170,32 @@ private struct BoardShadow: View {
     }
 }
 
-/// Column numbers along the top, row letters down the side.
+/// Column numbers along the top, row letters down the side. The highlighted cell's labels light in a
+/// cascade from the board's edge toward the cell: each label waits 20 ms per cell of distance from
+/// the edge (the full tier only).
 struct BoardLabels: View {
     let geometry: BoardGeometry
     var highlighted: Coordinate?
+    @Environment(\.motionPolicy) private var policy
+
+    /// Seconds per cell of distance from the edge.
+    static let cascadeStep: TimeInterval = 0.02
 
     var body: some View {
+        let step = policy.tier == .full ? BoardLabels.cascadeStep : 0
         ZStack(alignment: .topLeading) {
             ForEach(0..<geometry.boardSize, id: \.self) { index in
                 let middle = geometry.gutter + (CGFloat(index) + 0.5) * geometry.cell
+                let delay = Double(index) * step
                 label(Coordinate.columnLabel(index), isLit: highlighted?.column == index)
                     .position(x: middle, y: geometry.gutter / 2 - 1)
+                    .animation(.easeOut(duration: 0.2).delay(delay), value: highlighted)
                 label(Coordinate.rowLabel(index), isLit: highlighted?.row == index)
                     .position(x: geometry.gutter / 2 - 1, y: middle)
+                    .animation(.easeOut(duration: 0.2).delay(delay), value: highlighted)
             }
         }
         .font(.system(size: max(8, min(13, geometry.cell * 0.36)), weight: .bold, design: .rounded))
-        .animation(.easeOut(duration: 0.2), value: highlighted)
         .accessibilityHidden(true)
     }
 
@@ -174,235 +204,5 @@ struct BoardLabels: View {
             .foregroundStyle(isLit ? AnyShapeStyle(Theme.reticle) : AnyShapeStyle(.secondary))
             .shadow(color: isLit ? Theme.reticle.opacity(0.8) : .clear, radius: 4)
             .scaleEffect(isLit ? 1.2 : 1)
-    }
-}
-
-/// The result of a shot, drawn in its cell.
-struct CellMarkView: View {
-    let mark: CellMark
-    let cell: CGFloat
-    /// A hit on a ship the player can't see yet gets a halo so it stands out on open water.
-    var showsHitGlow = false
-    /// The fleet miniature draws plain dots, which read better at that size.
-    var isMiniature = false
-    /// The board's ``FlameClock`` time, which makes fires flicker.
-    var time: Double?
-
-    var body: some View {
-        symbol(for: mark)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-    }
-
-    @ViewBuilder
-    private func symbol(for mark: CellMark) -> some View {
-        if isMiniature {
-            Circle()
-                .fill(miniatureColor)
-                .frame(width: cell * 0.5, height: cell * 0.5)
-                .shadow(color: mark == .miss ? .clear : Theme.hit, radius: cell * 0.2)
-        } else {
-            switch mark {
-            case .miss:
-                SplashMark(cell: cell)
-            case .hit:
-                FlameMark(cell: cell, showsHalo: showsHitGlow, time: time)
-            case .sunk:
-                FlameMark(cell: cell, scale: 0.7, showsHalo: false, time: time)
-                    .opacity(0.8)
-            }
-        }
-    }
-
-    private var miniatureColor: Color {
-        switch mark {
-        case .miss: .white.opacity(0.7)
-        case .hit: Theme.flame
-        case .sunk: Theme.hit
-        }
-    }
-}
-
-/// Where a shell fell into open water.
-private struct SplashMark: View {
-    let cell: CGFloat
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(Color.white.opacity(0.3), lineWidth: max(0.75, cell * 0.03))
-                .frame(width: cell * 0.52, height: cell * 0.52)
-            Circle()
-                .fill(Color.white.opacity(0.9))
-                .frame(width: cell * 0.18, height: cell * 0.18)
-                .shadow(color: .white.opacity(0.7), radius: cell * 0.1)
-        }
-    }
-}
-
-/// One clock for all the fires on a board, so a board full of hits redraws once a frame rather than
-/// once per flame. It stops when nothing is burning, under Reduce Motion and in Low Power Mode, and
-/// passes `nil` then.
-struct FlameClock<Content: View>: View {
-    let isBurning: Bool
-    @ViewBuilder let content: (Double?) -> Content
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        let isStill = !isBurning || Motion.holdsStill(reduceMotion: reduceMotion)
-        TimelineView(.animation(minimumInterval: 1 / 24, paused: isStill)) { timeline in
-            // Shares the board's coordinates: marks inside are placed with `position`.
-            ZStack(alignment: .topLeading) {
-                content(isStill ? nil : Motion.seconds(timeline.date))
-            }
-        }
-    }
-}
-
-/// A fire burning where a shell struck a ship. It flickers with `time` from the board's
-/// ``FlameClock``, and holds still without it.
-struct FlameMark: View {
-    let cell: CGFloat
-    var scale: CGFloat = 1
-    var showsHalo = true
-    var time: Double?
-    /// Each fire flickers at its own pace.
-    @State private var rhythm = FlameMark.makeRhythm()
-
-    nonisolated private static func makeRhythm() -> (phase: Double, speed: Double) {
-        (.random(in: 0...(2 * .pi)), .random(in: 2.4...3.6))
-    }
-
-    var body: some View {
-        let flicker: Double = time.map { 0.5 + 0.5 * sin($0 * rhythm.speed * 2 * .pi + rhythm.phase) } ?? 0.5
-        ZStack {
-            if showsHalo {
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Theme.flame.opacity(0.6), Theme.hit.opacity(0.25), Theme.hit.opacity(0)],
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: cell * 0.5
-                        )
-                    )
-                    .frame(width: cell, height: cell)
-                    .scaleEffect(0.92 + 0.16 * flicker)
-            }
-            Image(systemName: "flame.fill")
-                .font(.system(size: cell * 0.52 * scale))
-                .foregroundStyle(LinearGradient(colors: [Theme.ember, Theme.flame, Theme.hit], startPoint: .top, endPoint: .bottom))
-                .scaleEffect(x: 1.04 - 0.1 * flicker, y: 0.94 + 0.14 * flicker, anchor: .bottom)
-                .shadow(color: Theme.flame.opacity(0.9), radius: cell * 0.12 * scale)
-        }
-        .allowsHitTesting(false)
-    }
-}
-
-/// The crosshair on the cell the player is aiming at: a turning ring, and brackets that snap
-/// shut each time the aim moves.
-struct ReticleView: View {
-    let cell: CGFloat
-    let target: Coordinate
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        let isStill = Motion.holdsStill(reduceMotion: reduceMotion)
-        ZStack {
-            TimelineView(.animation(minimumInterval: 1 / 30, paused: isStill)) { timeline in
-                Circle()
-                    .strokeBorder(Theme.reticle.opacity(0.9), style: StrokeStyle(lineWidth: max(1, cell * 0.045), dash: [cell * 0.1, cell * 0.07]))
-                    .frame(width: cell * 0.72, height: cell * 0.72)
-                    .rotationEffect(.degrees(isStill ? 0 : Motion.cycle(timeline.date, period: 5) * 360))
-            }
-            LockOnBrackets(cell: cell)
-                .id(target)
-            Circle()
-                .fill(Theme.reticle)
-                .frame(width: max(3, cell * 0.1), height: max(3, cell * 0.1))
-        }
-        .glow(Theme.reticle, radius: cell * 0.18)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
-private struct LockOnBrackets: View {
-    let cell: CGFloat
-    @State private var isLocked = false
-
-    var body: some View {
-        CornerBrackets()
-            .stroke(Theme.reticle, style: StrokeStyle(lineWidth: max(1.5, cell * 0.06), lineCap: .round, lineJoin: .round))
-            .frame(width: cell * 0.96, height: cell * 0.96)
-            .scaleEffect(isLocked ? 1 : 1.9)
-            .opacity(isLocked ? 1 : 0)
-            .onAppear {
-                withAnimation(.spring(duration: 0.4, bounce: 0.45)) {
-                    isLocked = true
-                }
-            }
-    }
-}
-
-/// Four L-shaped marks at the corners of a square.
-struct CornerBrackets: Shape {
-    var arm: CGFloat = 0.28
-
-    func path(in rect: CGRect) -> Path {
-        let length = min(rect.width, rect.height) * arm
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.minY + length))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.minX + length, y: rect.minY))
-        path.move(to: CGPoint(x: rect.maxX - length, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + length))
-        path.move(to: CGPoint(x: rect.maxX, y: rect.maxY - length))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.maxX - length, y: rect.maxY))
-        path.move(to: CGPoint(x: rect.minX + length, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - length))
-        return path
-    }
-}
-
-/// Light bands and laser lines along the aimed row and column.
-struct AimGuides: View {
-    let geometry: BoardGeometry
-    let target: Coordinate
-
-    var body: some View {
-        let cell = geometry.rect(for: target)
-        let grid = geometry.gridRect
-        ZStack(alignment: .topLeading) {
-            Rectangle()
-                .fill(Theme.reticle.opacity(0.1))
-                .frame(width: grid.width, height: cell.height)
-                .position(x: grid.midX, y: cell.midY)
-            Rectangle()
-                .fill(Theme.reticle.opacity(0.1))
-                .frame(width: cell.width, height: grid.height)
-                .position(x: cell.midX, y: grid.midY)
-            Rectangle()
-                .fill(laser(.horizontal))
-                .frame(width: grid.width, height: 1)
-                .position(x: grid.midX, y: cell.midY)
-            Rectangle()
-                .fill(laser(.vertical))
-                .frame(width: 1, height: grid.height)
-                .position(x: cell.midX, y: grid.midY)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    private func laser(_ axis: Axis) -> LinearGradient {
-        LinearGradient(
-            colors: [Theme.reticle.opacity(0), Theme.reticle.opacity(0.55), Theme.reticle.opacity(0)],
-            startPoint: axis == .horizontal ? .leading : .top,
-            endPoint: axis == .horizontal ? .trailing : .bottom
-        )
     }
 }

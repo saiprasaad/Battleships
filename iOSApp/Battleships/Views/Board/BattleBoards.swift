@@ -5,7 +5,8 @@ import SwiftUI
 struct TargetBoard: View {
     let perspective: BattlePerspective
     let aimed: Coordinate?
-    let effects: [ImpactEffect]
+    /// The battle's direction: the shells in the air and the effects on this board.
+    let controller: BattleController
     let isInteractive: Bool
     let onTap: @MainActor (Coordinate) -> Void
 
@@ -32,7 +33,9 @@ struct TargetBoard: View {
                     .accessibilityHidden(true)
             }
 
-            let shots = perspective.myShots
+            // A cell's result stays a secret while its shell is in the air.
+            let hidden = controller.cellsAwaitingLanding(on: .target, at: Date())
+            let shots = perspective.myShots.filter { !hidden.contains($0.target) }
             ForEach(shots.filter { !$0.result.isHit }, id: \.target) { move in
                 if let mark = perspective.targetMark(at: move.target) {
                     CellMarkView(mark: mark, cell: geometry.cell)
@@ -54,9 +57,14 @@ struct TargetBoard: View {
                     .transition(.scale(scale: 1.6).combined(with: .opacity))
             }
 
-            ForEach(effects.filter { $0.board == .target }) { effect in
-                ImpactView(isHit: effect.isHit, cell: geometry.cell)
-                    .position(geometry.center(of: effect.coordinate))
+            EffectsLayer(geometry: geometry, board: .target, controller: controller)
+
+            if let aim {
+                Color.clear
+                    .frame(width: geometry.cell, height: geometry.cell)
+                    .battleAnchor(.targetCell(aim))
+                    .position(geometry.center(of: aim))
+                    .allowsHitTesting(false)
             }
 
             CellTargets(geometry: geometry, rules: perspective.rules) { coordinate in
@@ -72,6 +80,7 @@ struct TargetBoard: View {
                 }
             }
         }
+        .battleAnchor(.targetBoard)
         .animation(.spring(duration: 0.3, bounce: 0.2), value: aim)
         .animation(.easeOut(duration: 0.5), value: perspective.knownEnemyShips)
         .animation(.easeInOut(duration: 0.4), value: isInteractive)
@@ -96,7 +105,8 @@ struct TargetBoard: View {
 /// The player's own waters: their fleet and the enemy's shots against it.
 struct HomeBoard: View {
     let perspective: BattlePerspective
-    let effects: [ImpactEffect]
+    /// The battle's direction: the enemy's telegraphed shell and the effects on this board.
+    let controller: BattleController
     /// The miniature in the battle header has no labels and is a single button, not 100 cells.
     var isMiniature = false
     /// The enemy is lining up a shot: a red sweep crosses the water.
@@ -112,7 +122,9 @@ struct HomeBoard: View {
                     .accessibilityHidden(true)
             }
 
-            let shots = perspective.enemyShots
+            // The enemy's result stays a secret until its telegraphed shell lands.
+            let hidden = controller.cellsAwaitingLanding(on: .home, at: Date())
+            let shots = perspective.enemyShots.filter { !hidden.contains($0.target) }
             ForEach(shots.filter { !$0.result.isHit }, id: \.target) { move in
                 if let mark = perspective.homeMark(at: move.target) {
                     CellMarkView(mark: mark, cell: geometry.cell, isMiniature: isMiniature)
@@ -137,9 +149,14 @@ struct HomeBoard: View {
                     .transition(.opacity)
             }
 
-            ForEach(effects.filter { $0.board == .home }) { effect in
-                ImpactView(isHit: effect.isHit, cell: geometry.cell)
-                    .position(geometry.center(of: effect.coordinate))
+            EffectsLayer(geometry: geometry, board: .home, controller: controller, isMiniature: isMiniature)
+
+            if !isMiniature, let awaited = controller.telegraph?.coordinate ?? controller.latestEnemyShot {
+                Color.clear
+                    .frame(width: geometry.cell, height: geometry.cell)
+                    .battleAnchor(.homeCell(awaited))
+                    .position(geometry.center(of: awaited))
+                    .allowsHitTesting(false)
             }
 
             if !isMiniature {
@@ -148,6 +165,7 @@ struct HomeBoard: View {
                 } onTap: { _ in }
             }
         }
+        .battleAnchor(isMiniature ? nil : .homeBoard)
         .animation(.easeInOut(duration: 0.5), value: isUnderFire)
     }
 
@@ -194,132 +212,21 @@ struct CellTargets: View {
     }
 }
 
-/// Lets the player drag ships into position and tap them to turn them.
-struct PlacementBoard: View {
-    let model: FleetPlacementModel
-    let feedback: any FeedbackPlayer
-    /// Set while a ship is being dragged, so the screen around the board can stop scrolling.
-    @Binding var isDragging: Bool
-
-    private struct Drag: Equatable {
-        let index: Int
-        var translation: CGSize
-        /// Where the ship would land if dropped now.
-        var candidate: ShipPlacement
-    }
-
-    /// Resets by itself when the system cancels a drag (Control Center, a call), which `onEnded`
-    /// never hears about. The reset springs the ship back into place.
-    @GestureState(resetTransaction: Transaction(animation: .spring(duration: 0.3, bounce: 0.25)))
-    private var drag: Drag? = nil
-
-    /// Drags are measured in the board's space, which stays put while the dragged ship moves.
-    private static var boardSpace: NamedCoordinateSpace { .named("PlacementBoard") }
-
-    var body: some View {
-        BoardView(rules: model.rules, accent: Theme.reticle) { geometry in
-            if let drag {
-                let fits = model.canPlace(drag.candidate, replacing: drag.index)
-                let rect = geometry.rect(for: drag.candidate).insetBy(dx: 2, dy: 2)
-                RoundedRectangle(cornerRadius: geometry.cell * 0.3, style: .continuous)
-                    .fill((fits ? Theme.victory : Theme.hit).opacity(0.28))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: geometry.cell * 0.3, style: .continuous)
-                            .strokeBorder(fits ? Theme.victory : Theme.hit, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
-                    )
-                    .frame(width: rect.width, height: rect.height)
-                    .position(x: rect.midX, y: rect.midY)
-                    .allowsHitTesting(false)
+private extension BattleController {
+    /// The cells on `board` whose result is still a secret at `now`: a shell for them is in the air
+    /// (held at the apex, or landing later), or the enemy's telegraphed shell hasn't landed yet. The
+    /// boards draw no mark there until it has.
+    func cellsAwaitingLanding(on board: BoardSide, at now: Date) -> Set<Coordinate> {
+        var cells = Set<Coordinate>()
+        for shell in shells where shell.board == board && shell.outcome != .misfire {
+            if let lands = shell.lands, lands <= now {
+                continue
             }
-
-            ForEach(model.ships.indices, id: \.self) { index in
-                ship(at: index, geometry: geometry)
-            }
+            cells.insert(shell.coordinate)
         }
-        .coordinateSpace(Self.boardSpace)
-        .onChange(of: drag) { old, new in
-            isDragging = new != nil
-            guard let new else { return }
-            if old == nil {
-                model.selectedIndex = new.index
-                feedback.play(.select)
-            } else if old?.candidate != new.candidate {
-                feedback.play(.select)
-            }
+        if board == .home, let telegraph, telegraph.lands > now {
+            cells.insert(telegraph.coordinate)
         }
-    }
-
-    @ViewBuilder
-    private func ship(at index: Int, geometry: BoardGeometry) -> some View {
-        let ship = model.ships[index]
-        let rect = geometry.rect(for: ship).insetBy(dx: geometry.cell * 0.08, dy: geometry.cell * 0.08)
-        let translation = drag?.index == index ? drag?.translation : nil
-
-        ShipView(ship: ship, isHighlighted: translation != nil || model.selectedIndex == index)
-            .frame(width: rect.width, height: rect.height)
-            .scaleEffect(translation != nil ? 1.06 : 1)
-            .contentShape(Rectangle())
-            .onTapGesture { tap(index) }
-            // Wins over the scroll view around the board, so dragging a ship up or down moves the ship.
-            .highPriorityGesture(dragGesture(for: index, geometry: geometry))
-            .offset(translation ?? .zero)
-            .position(x: rect.midX, y: rect.midY)
-            .zIndex(translation != nil ? 1 : 0)
-            .accessibilityElement()
-            .accessibilityLabel("\(ship.kind.displayName), \(Phrase.count(ship.length, "square"))")
-            .accessibilityValue("\(ship.orientation == .horizontal ? "Horizontal" : "Vertical"), from \(ship.origin.notation) to \(ship.end.notation)")
-            .accessibilityHint(ship.length > 1 ? "Double-tap to turn. Swipe up or down for more actions." : "Swipe up or down for actions that move it.")
-            .accessibilityAction { tap(index) }
-            .accessibilityAction(named: "Move up") { nudge(index, rows: -1) }
-            .accessibilityAction(named: "Move down") { nudge(index, rows: 1) }
-            .accessibilityAction(named: "Move left") { nudge(index, columns: -1) }
-            .accessibilityAction(named: "Move right") { nudge(index, columns: 1) }
-    }
-
-    private func dragGesture(for index: Int, geometry: BoardGeometry) -> some Gesture {
-        DragGesture(minimumDistance: 4, coordinateSpace: Self.boardSpace)
-            .updating($drag) { value, state, _ in
-                guard let landing = candidate(for: index, translation: value.translation, cell: geometry.cell) else { return }
-                state = Drag(index: index, translation: value.translation, candidate: landing)
-            }
-            .onEnded { value in
-                guard let landing = candidate(for: index, translation: value.translation, cell: geometry.cell) else { return }
-                let fits = model.canPlace(landing, replacing: index)
-                if fits {
-                    withAnimation(.spring(duration: 0.3, bounce: 0.25)) {
-                        model.move(index, to: landing.origin)
-                    }
-                }
-                feedback.play(fits ? .place : .invalid)
-            }
-    }
-
-    /// The ship moved by `translation`, snapped to whole cells.
-    private func candidate(for index: Int, translation: CGSize, cell: CGFloat) -> ShipPlacement? {
-        guard model.ships.indices.contains(index), cell > 0 else { return nil }
-        let ship = model.ships[index]
-        let columns = Int((translation.width / cell).rounded())
-        let rows = Int((translation.height / cell).rounded())
-        return ship.moved(to: ship.origin.offsetBy(rows: rows, columns: columns))
-    }
-
-    private func tap(_ index: Int) {
-        guard model.ships.indices.contains(index) else { return }
-        // A one-square boat looks the same either way round, so a tap just picks it out.
-        guard model.ships[index].length > 1 else {
-            model.selectedIndex = index
-            feedback.play(.select)
-            return
-        }
-        withAnimation(.spring(duration: 0.3, bounce: 0.3)) {
-            model.selectedIndex = index
-            feedback.play(model.rotate(index) ? .place : .invalid)
-        }
-    }
-
-    private func nudge(_ index: Int, rows: Int = 0, columns: Int = 0) {
-        withAnimation(.spring(duration: 0.25)) {
-            feedback.play(model.nudge(index, rows: rows, columns: columns) ? .place : .invalid)
-        }
+        return cells
     }
 }
